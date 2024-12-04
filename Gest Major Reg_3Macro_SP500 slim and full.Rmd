@@ -1,0 +1,1343 @@
+---
+title: "Gest sub D2house 3Macro Main"
+author: "Ivy Yang"
+date: "2024-05-04"
+output: html_document
+---
+
+# This is the major regression I have in my submitted version of Gest IV paper. #
+# Before running this file, please first run the data cleaning file to get the merged_data_21 
+# This file will generate the main results, the predicted results for simulated credit environment, which are prepared to be graphed in the graphing file.#
+
+```{r}
+# Load the data
+load(file = "/Users/ivyyang/Dropbox/cloud/Research/Empirical Work/Macro_factor_economic/d21_clean_data_clean_all_confoundings.rds")
+```
+
+```{r}
+# Load data from DELL ####
+load(file = "C:/Users/xxy350/Dropbox/cloud/Research/Empirical Work/Macro_factor_economic/d21_clean_data_clean_all_confoundings.rds")
+```
+
+
+```{r}
+write.csv(merged_data_21, "/Users/ivyyang/Dropbox/cloud/Submitted papers/Data/merged_data_21.csv")
+```
+
+
+```{r}
+# Optional: Check the data
+names(merged_data_21)
+
+
+```
+```{r}
+# value of SP500 for each year, display by year
+SP500 <- merged_data_21 %>%
+  select(year, SP500) %>%
+  distinct() %>%
+  arrange(year)
+
+SP500
+```
+
+
+```{r}
+require(data.table)
+require(psidR)
+require(plm)
+require(ivtools)
+require(stargazer)
+require(foreign)
+require(dplyr)
+library(tidyverse)
+```
+
+```{r}
+# Rename interested confoundings ####
+merged_data <- merged_data_21 %>%
+  rename(
+    L.BusAppl = BABATOTALSAUS,
+    L.HouseInd = USSTHPI,
+    #L.ExpMarket = BOGZ1FA564091403A,
+    #L.ExpMarket = WILLLRGCAP,
+    #L.ExpMarket =TENEXPCHAREARISPRE,
+    L.ExpMarket =SP500,
+    L.theta = NFCI
+  )
+```
+
+```{r}
+# Inflate and deflate the variables
+summary(merged_data$CPIAUCSL)
+summary(merged_data$wealth)
+```
+
+```{r}
+# Set the benchmark year's CPI for 2019
+benchmark_cpi <- merged_data %>%
+  filter(year == 2019) %>%
+  summarise(mean_CPIAUCSL = mean(CPIAUCSL, na.rm = TRUE)) %>%
+  pull(mean_CPIAUCSL)
+
+# Calculate adjusted values for wealth, house_value, stock_value, and inherit
+data <- merged_data %>%
+  mutate(
+    L.ExpMarket = ifelse(
+      year < 2019,
+      L.ExpMarket * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        L.ExpMarket / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        L.ExpMarket  # No change for the benchmark year
+      )
+    ),
+    L.HouseInd = ifelse(
+      year < 2019,
+      L.HouseInd * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        L.HouseInd / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        L.HouseInd  # No change for the benchmark year
+      )
+    ),
+    adjusted_wealth = ifelse(
+      year < 2019,
+      wealth * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        wealth / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        wealth  # No change for the benchmark year
+      )
+    ),
+    adjusted_house_value = ifelse(
+      year < 2019,
+      house_value * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        house_value / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        house_value  # No change for the benchmark year
+      )
+    ),
+    adjusted_stock_value = ifelse(
+      year < 2019,
+      stock_value * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        stock_value / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        stock_value  # No change for the benchmark year
+      )
+    ),
+    adjusted_lumpsum_endowment = ifelse(
+      year < 2019,
+     lumpsum_endowment * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        lumpsum_endowment / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        lumpsum_endowment  # No change for the benchmark year
+      )
+    ),
+    adjusted_inherit = ifelse(
+      year < 2019,
+      inherit * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        inherit / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        inherit  # No change for the benchmark year
+      )
+    ),
+     adjusted_labor_income = ifelse(
+      year < 2019,
+      labor_income * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        labor_income / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        labor_income  # No change for the benchmark year
+      )
+    )
+  )
+
+```
+```{r}
+summary(data$adjusted_wealth)
+summary(data$adjusted_inherit)
+summary(data$adjusted_stock_value)
+summary(data$adjusted_house_value)
+```
+```{r}
+# Inverse Hyperbolic Sine Transformation
+data <- data %>%
+  mutate(
+    wealth = asinh(adjusted_wealth),
+    inherit = asinh(adjusted_inherit),
+    lumpsum_endowment = asinh(adjusted_lumpsum_endowment),
+    stock_value = asinh(adjusted_stock_value),
+    house_value = asinh(adjusted_house_value)
+  )
+```
+
+```{r}
+summary(data$wealth)
+summary(data$inherit)
+summary(data$lumpsum_endowment)
+summary(data$stock_value)
+summary(data$house_value)
+```
+
+############### Start the regressions #################
+```{r}
+Pdd21<-pdata.frame(subset(data,year!=2009),index = c("pid", "year"))
+Pdd19 <- pdata.frame(subset(data, !(year == 2009 | year == 2021)), index = c("pid", "year"))
+```
+
+```{r}
+Pdd<-Pdd21
+```
+
+
+```{r}
+# First stage regressions ####
+Function_wealth_1<-wealth~D_bus_fam_experience+L.theta+D_college + lumpsum_endowment # pure shock on wealth, confouding with family education, and ability.
+
+Function_wealth_2<-wealth~D_college + L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket + house_value*D_2house+stock_value*D_stock  # This is a shock by investment, confounding with macroeconomic variables
+
+Function_wealth_S2<-wealth~D_college + L.theta+ L.BusAppl+ L.ExpMarket +stock_value*D_stock
+
+Function_wealth_3<-Log_total_wealth~D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket + house_value*D_2house+stock_value*D_stock + lumpsum_endowment # Benchmark confouding with both macro and individual level variables.
+```
+
+```{r}
+Function_wealth_2.CCA<-wealth~D_college + L.theta+ CCA1 + CCA2 + house_value*D_2house+stock_value*D_stock  # This is a shock by investment, confounding with macroeconomic variables
+
+Function_wealth_stock.CCA<-wealth~D_college + L.theta + CCA1 + CCA2 + stock_value*D_stock # This is a shock by investment, confounding with macroeconomic variables
+
+Function_wealth_3.CCA<-Log_total_wealth~D_bus_fam_experience + D_college+ L.theta+ CCA1+CCA2 + house_value*D_2house+stock_value*D_stock + lumpsum_endowment # Benchmark confouding with both macro and individual level variables.
+```
+
+
+#####################  two-stages ##################
+
+
+```{r}
+# X.LZ ####
+# whole data
+fitX.LZ.1IV<-glm(formula = Function_wealth_1,data = Pdd)
+fitX.LZ.2IV<-glm(formula = Function_wealth_2,data = Pdd)
+fitX.LZ.SIV<-glm(formula = Function_wealth_S2,data = Pdd)
+fitX.LZ.3IV<-glm(formula = Function_wealth_3,data = Pdd)
+
+fitX.LZ.2IV.CCA<-glm(formula = Function_wealth_2.CCA,data = Pdd)
+fitX.LZ.SIV.CCA<-glm(formula = Function_wealth_stock.CCA,data = Pdd)
+fitX.LZ.3IV.CCA<-glm(formula = Function_wealth_3.CCA,data = Pdd)
+```
+
+```{r}
+# Second stage regressions ####
+Function_Enter.1IV<-Enter1_bus~D_bus_fam_experience+D_college  +L.theta+ wealth+D_black+D_gender+D_married
+
+Function_Enter.2IV<-Enter1_bus~D_college + L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket+ wealth+D_college+D_black+D_gender+D_married
+
+Function_Enter.SIV<-Enter1_bus~D_college + L.theta+ L.BusAppl+ L.ExpMarket+ wealth+D_college+D_black+D_gender+D_married
+
+Function_Enter.3IV<-Enter1_bus~D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket +wealth+D_college+D_black+D_gender+D_married
+
+Function_Enter.2IV.CCA<-Enter1_bus~D_college + L.theta+CCA1+CCA2+ wealth+D_college+D_black+D_gender+D_married
+
+Function_Enter.SIV.CCA<-Enter1_bus~D_college + L.theta+CCA1+CCA2+ wealth+D_college+D_black+D_gender+D_married
+
+Function_Enter.3IV.CCA<-Enter1_bus~D_bus_fam_experience + D_college+ L.theta +CCA1+CCA2 +wealth+D_college+D_black+D_gender+D_married
+
+#Function_Enter.1IV<-Enter1_bus~L.NFCI + L.GDP + L.PRS85006091
+```
+
+```{r}
+# Y.LX ####
+# full
+fitY.LX.1IV<-glm(formula = Function_Enter.1IV, family = "binomial"(link = "logit"), data = Pdd)
+
+fitY.LX.2IV<-glm(formula = Function_Enter.2IV, family = "binomial"(link = "logit"), data = Pdd)
+
+fitY.LX.SIV<-glm(formula = Function_Enter.SIV, family = "binomial"(link = "logit"), data = Pdd)
+
+fitY.LX.3IV<-glm(formula = Function_Enter.3IV, family = "binomial"(link = "logit"), data = Pdd)
+
+
+fitY.LX.2IV.CCA<-glm(formula = Function_Enter.2IV.CCA, family = "binomial"(link = "logit"), data = Pdd)
+
+fitY.LX.SIV.CCA<-glm(formula = Function_Enter.SIV.CCA, family = "binomial"(link = "logit"), data = Pdd)
+
+fitY.LX.3IV.CCA<-glm(formula = Function_Enter.3IV.CCA, family = "binomial"(link = "logit"), data = Pdd)
+```
+
+
+```{r}
+# Two stages result ####
+
+# 1. with only Log_inheritance IV
+# full
+IV1.fambus.full<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.1IV, 
+                             fitY.LX = fitY.LX.1IV,
+                             family="binomial", 
+                             data = Pdd,
+                             ctrl = TRUE)
+summary(IV1.fambus.full)
+```
+
+```{r}
+# 2. with financial assets IV
+# full
+IV2.macro.full<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.2IV, 
+                             fitY.LX = fitY.LX.2IV,
+                             family="binomial", 
+                             data = Pdd,
+                             ctrl = TRUE)
+
+IV2.macro.full.CCA<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.2IV.CCA, 
+                             fitY.LX = fitY.LX.2IV.CCA,
+                             family="binomial", 
+                             data = Pdd,
+                             ctrl = TRUE)
+print("------IV-balanced--------")
+summary(IV2.macro.full)
+
+print("------IV-balanced CCA--------")
+summary(IV2.macro.full.CCA)
+```
+
+```{r}
+# 2. with financial assets IV
+# stock
+IV2.macro.stock<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.SIV, 
+                             fitY.LX = fitY.LX.SIV,
+                             family="binomial", 
+                             data = Pdd,
+                             ctrl = TRUE)
+
+IV2.macro.stock.CCA<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.SIV.CCA, 
+                             fitY.LX = fitY.LX.SIV.CCA,
+                             family="binomial", 
+                             data = Pdd,
+                             ctrl = TRUE)
+print("------IV-stock--------")
+summary(IV2.macro.stock)
+print("------IV-stock CCA--------")
+summary(IV2.macro.stock.CCA)
+```
+
+
+```{r}
+# 3. with financial assets IV + inherit
+# full
+IV3.all.full<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.3IV, 
+                             fitY.LX = fitY.LX.3IV,
+                             family="binomial"(link = "logit"), 
+                             data = Pdd,
+                             ctrl = TRUE)
+
+IV3.all.full.CCA<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.3IV.CCA, 
+                             fitY.LX = fitY.LX.3IV.CCA,
+                             family="binomial"(link = "logit"), 
+                             data = Pdd,
+                             ctrl = TRUE)
+print("------IV-both--------")
+summary(IV3.all.full)
+print("------IV-both CCA--------")
+summary(IV3.all.full.CCA)
+```
+
+
+############# G-estimation ##############
+```{r}
+# Z.L ####
+# full
+fitZ.L.1IV<-glm(formula = lumpsum_endowment~ D_bus_fam_experience+D_college+L.theta, family = "gaussian", data=Pdd)
+
+fitZ.L.2IV<-glm(formula = house_value*D_2house + stock_value*D_stock ~ D_college + L.theta+ L.BusAppl+ L.HouseInd+L.ExpMarket, family = "gaussian", data=Pdd)
+
+fitZ.L.SIV<-glm(formula = stock_value*D_stock ~ D_college + L.theta+ L.BusAppl+ L.ExpMarket, family = "gaussian", data=Pdd)
+
+fitZ.L.3IV<-glm(formula = house_value*D_2house + stock_value*D_stock+ lumpsum_endowment ~ D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket, family = "gaussian", data=Pdd)
+
+fitZ.L.2IV.CCA<-glm(formula = house_value*D_2house + stock_value*D_stock ~ D_college + L.theta+ CCA1+CCA2, family = "gaussian", data=Pdd)
+
+fitZ.L.SIV.CCA<-glm(formula = stock_value*D_stock ~ D_college + L.theta+ CCA1+CCA2, family = "gaussian", data=Pdd)
+
+fitZ.L.3IV.CCA<-glm(formula = house_value*D_2house + stock_value*D_stock+ lumpsum_endowment ~ D_bus_fam_experience + D_college+ L.theta +CCA1+CCA2, family = "gaussian", data=Pdd)
+```
+
+
+```{r}
+# Y.LZX ####
+# Y~LZX full ####
+fitY.LZX.1IV<-glm(formula = Enter1_bus ~  D_bus_fam_experience+D_college+L.theta +lumpsum_endowment + wealth + D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd)
+
+fitY.LZX.2IV<-glm(formula = Enter1_bus ~ D_college + L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket +house_value*D_2house + stock_value*D_stock+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd)
+
+fitY.LZX.SIV<-glm(formula = Enter1_bus ~ D_college + L.theta+ L.BusAppl+ L.ExpMarket +stock_value*D_stock+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd)
+
+fitY.LZX.3IV<-glm(formula = Enter1_bus ~ D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket +house_value*D_2house + stock_value*D_stock+lumpsum_endowment+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd)
+
+fitY.LZX.2IV.CCA<-glm(formula = Enter1_bus ~ D_college + L.theta+ CCA1+CCA2 +house_value*D_2house + stock_value*D_stock+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd)
+
+fitY.LZX.SIV.CCA<-glm(formula = Enter1_bus ~ D_college + L.theta+ CCA1+CCA2 +stock_value*D_stock+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd)
+
+fitY.LZX.3IV.CCA<-glm(formula = Enter1_bus ~ D_bus_fam_experience + D_college+ L.theta +CCA1+CCA2 +house_value*D_2house + stock_value*D_stock+lumpsum_endowment+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd)
+                      
+```
+
+
+```{r}
+# G-estimation results ####
+G.fambus.1IV.full<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.1IV, 
+                             fitY.LZX = fitY.LZX.1IV,
+                             link = "identity", 
+                             data = Pdd,
+                             formula = ~ D_bus_fam_experience+L.theta + D_college)
+```
+
+```{r}
+G.macro.2IV.full<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.2IV, 
+                             fitY.LZX = fitY.LZX.2IV,
+                             link = "identity", 
+                             data = Pdd,
+                             formula = ~ L.theta + D_college + L.HouseInd+ L.ExpMarket)
+
+G.macro.2IV.full.CCA<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.2IV.CCA, 
+                             fitY.LZX = fitY.LZX.2IV.CCA,
+                             link = "identity", 
+                             data = Pdd,
+                             formula = ~ L.theta + D_college +CCA1+CCA2)
+```
+
+```{r}
+G.macro.SIV.stock<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.SIV, 
+                             fitY.LZX = fitY.LZX.SIV,
+                             link = "identity", 
+                             data = Pdd,
+                             formula = ~ L.theta + D_college + L.ExpMarket)
+
+G.macro.SIV.stock.CCA<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.SIV.CCA, 
+                             fitY.LZX = fitY.LZX.SIV.CCA,
+                             link = "identity", 
+                             data = Pdd,
+                             formula = ~ L.theta + D_college +CCA1+CCA2)
+```
+
+
+```{r}
+G.all.3IV.full<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.3IV, 
+                             fitY.LZX = fitY.LZX.3IV,
+                             link = "identity", 
+                             data = Pdd,
+                             formula = ~ D_bus_fam_experience+ L.theta + D_college + L.HouseInd+ L.ExpMarket)
+
+G.all.3IV.full.CCA<- ivglm(estmethod = "g",
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.3IV.CCA, 
+                             fitY.LZX = fitY.LZX.3IV.CCA,
+                             link = "identity", 
+                             data = Pdd,
+                             formula = ~ D_bus_fam_experience+ L.theta + D_college +CCA1+CCA2)
+```
+
+
+```{r}
+# Summary the G-estimation results ####
+print("------IV-inheritance--------")
+summary(G.fambus.1IV.full)
+
+print("=======================================================")
+print("------ financial IVs--------")
+summary(G.macro.2IV.full)
+
+print("------ financial IVs CCA--------")
+summary(G.macro.2IV.full.CCA)
+
+print("=======================================================")
+print("------ stock IV--------")
+summary(G.macro.SIV.stock)
+
+print("------ stock IV CCA--------")
+summary(G.macro.SIV.stock.CCA)
+
+print("=======================================================")
+print("------ all3 IVs--------")
+summary(G.all.3IV.full)
+
+print("------ all3 IVs CCA--------")
+summary(G.all.3IV.full.CCA)
+
+```
+
+
+```{r}
+library(margins)
+# full ####
+# This is the marginal effect of Log_total_wealth in the second step
+# Calculate individual marginal effects for Log_total_wealth
+individual_margins.wealth.1IV <- margins(fitY.LZX.1IV, variables = "wealth")
+individual_margins.wealth.2IV <- margins(fitY.LZX.1IV, variables = "wealth")
+individual_margins.wealth.SIV <- margins(fitY.LZX.SIV, variables = "wealth")
+individual_margins.wealth.3IV <- margins(fitY.LZX.3IV, variables = "wealth")
+
+individual_margins.theta.1IV <- margins(fitY.LZX.1IV, variables = "L.theta")
+individual_margins.theta.2IV <- margins(fitY.LZX.1IV, variables = "L.theta")
+individual_margins.theta.SIV <- margins(fitY.LZX.SIV, variables = "L.theta")
+individual_margins.theta.3IV <- margins(fitY.LZX.3IV, variables = "L.theta")
+
+# Calculate the average marginal effect
+avg_marginal_effect.wealth.1IV <- mean(individual_margins.wealth.1IV$dydx_wealth)
+avg_marginal_effect.wealth.2IV <- mean(individual_margins.wealth.2IV$dydx_wealth)
+avg_marginal_effect.wealth.SIV <- mean(individual_margins.wealth.SIV$dydx_wealth)
+avg_marginal_effect.wealth.3IV <- mean(individual_margins.wealth.3IV$dydx_wealth)
+
+avg_marginal_effect.theta.1IV <- mean(individual_margins.theta.1IV$dydx_L.theta)
+avg_marginal_effect.theta.2IV <- mean(individual_margins.theta.2IV$dydx_L.theta)
+avg_marginal_effect.theta.SIV <- mean(individual_margins.theta.SIV$dydx_L.theta)
+avg_marginal_effect.theta.3IV <- mean(individual_margins.theta.3IV$dydx_L.theta)
+```
+
+```{r}
+# Print the average marginal effect of asinh(wealth)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth if IV is only inheritance (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.1IV)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth if IV is only financial assets (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.2IV)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth if IV stock (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.SIV)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth  if IV is the combination (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.3IV)
+print("Log_wealth level")
+summary(Pdd$Log_total_wealth)
+```
+
+```{r}
+# Print the average marginal effect of theta
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is only inheritance (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.1IV)
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is only financial assets (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.2IV)
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is stock (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.SIV)
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is the combination (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.3IV)
+print("Log_wealth level")
+summary(Pdd$L.theta)
+```
+###############################################################################
+############              Simulation starts here                   ############
+###############################################################################
+```{r}
+# Add simulated theta in original data ####
+Pdd$S.theta.tight<-1
+Pdd$S.theta.loose<- -1
+Pdd$S.theta.flat<-0
+Pdd$S.theta.05<-0.5
+Pdd$S.theta.n05<- -0.5
+```
+
+```{r}
+# Generate new dataset for simulation ####
+Pdd_tight<-Pdd
+Pdd_tight$L.theta<-1
+
+Pdd_stight<-Pdd
+Pdd_stight$L.theta<-0.5
+
+Pdd_loose<-Pdd
+Pdd_loose$L.theta<- -1
+
+Pdd_sloose<-Pdd
+Pdd_sloose$L.theta<- -0.5
+
+Pdd_flat<-Pdd
+Pdd_tight$L.theta<-0
+```
+
+#### Pred fitX.LZ, get \hat{x} 
+```{r}
+# Get predicted \hat{x} for tight credit constraint S.theta.tight ####
+pred.fitX.LZ.1IV.tight<-predict(fitX.LZ.1IV,
+                                        newdata = Pdd_tight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.tight<-predict(fitX.LZ.2IV,
+                                        newdata = Pdd_tight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.tight.CCA<-predict(fitX.LZ.2IV.CCA,
+                                        newdata = Pdd_tight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.SIV.tight<-predict(fitX.LZ.SIV,
+                                        newdata = Pdd_tight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.SIV.tight.CCA<-predict(fitX.LZ.SIV.CCA,
+                                        newdata = Pdd_tight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV.tight<-predict(fitX.LZ.3IV,
+                                        newdata = Pdd_tight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV.tight.CCA<-predict(fitX.LZ.3IV.CCA,
+                                        newdata = Pdd_tight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+```
+
+```{r}
+# Get predicted \hat{x} for tight credit constraint S.theta.stight ####
+pred.fitX.LZ.1IV.stight<-predict(fitX.LZ.1IV,
+                                        newdata = Pdd_stight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.stight<-predict(fitX.LZ.2IV,
+                                        newdata = Pdd_stight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.stight.CCA<-predict(fitX.LZ.2IV.CCA,
+                                        newdata = Pdd_stight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.SIV.stight<-predict(fitX.LZ.SIV,
+                                        newdata = Pdd_stight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.SIV.stight.CCA<-predict(fitX.LZ.SIV.CCA,
+                                        newdata = Pdd_stight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV.stight<-predict(fitX.LZ.3IV,
+                                        newdata = Pdd_stight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV.stight.CCA<-predict(fitX.LZ.3IV.CCA,
+                                        newdata = Pdd_stight, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+```
+
+```{r}
+# Get predicted \hat{x} for loose credit constraint S.theta.loose ####
+pred.fitX.LZ.1IV.loose<-predict(fitX.LZ.1IV,
+                                        newdata = Pdd_loose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.loose<-predict(fitX.LZ.2IV,
+                                        newdata = Pdd_loose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.loose.CCA<-predict(fitX.LZ.2IV.CCA,
+                                        newdata = Pdd_loose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.SIV.loose<-predict(fitX.LZ.SIV,
+                                        newdata = Pdd_loose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.SIV.loose.CCA<-predict(fitX.LZ.SIV.CCA,
+                                        newdata = Pdd_loose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV.loose<-predict(fitX.LZ.3IV,
+                                        newdata = Pdd_loose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV.loose.CCA<-predict(fitX.LZ.3IV.CCA,
+                                        newdata = Pdd_loose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+```
+
+```{r}
+# Get predicted \hat{x} for loose credit constraint S.theta.loose ####
+pred.fitX.LZ.1IV.sloose<-predict(fitX.LZ.1IV,
+                                        newdata = Pdd_sloose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.sloose<-predict(fitX.LZ.2IV,
+                                        newdata = Pdd_sloose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.sloose.CCA<-predict(fitX.LZ.2IV.CCA,
+                                        newdata = Pdd_sloose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.SIV.sloose<-predict(fitX.LZ.SIV,
+                                        newdata = Pdd_sloose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.SIV.sloose.CCA<-predict(fitX.LZ.SIV.CCA,
+                                        newdata = Pdd_sloose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV.sloose<-predict(fitX.LZ.3IV,
+                                        newdata = Pdd_sloose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV.sloose.CCA<-predict(fitX.LZ.3IV.CCA,
+                                        newdata = Pdd_sloose, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+```
+
+```{r}
+# Get predicted \hat{x} for flat credit constraint S.theta.flat ####
+pred.fitX.LZ.1IV.flat<-predict(fitX.LZ.1IV,
+                                        newdata = Pdd_flat, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.flat<-predict(fitX.LZ.2IV,
+                                        newdata = Pdd_flat, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.flat.CCA<-predict(fitX.LZ.2IV.CCA,
+                                        newdata = Pdd_flat, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.SIV.flat<-predict(fitX.LZ.SIV,
+                                        newdata = Pdd_flat, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.SIV.flat.CCA<-predict(fitX.LZ.SIV.CCA,
+                                        newdata = Pdd_flat, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV.flat<-predict(fitX.LZ.3IV,
+                                        newdata = Pdd_flat, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV.flat.CCA<-predict(fitX.LZ.3IV.CCA,
+                                        newdata = Pdd_flat, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+```
+####
+
+####  Include predicted x into data set (for simulated L) 
+```{r}
+Pdd_tight.1IV<-Pdd_tight
+Pdd_tight.1IV$Log_total_wealth<-pred.fitX.LZ.1IV.tight
+Pdd_tight.2IV<-Pdd_tight
+Pdd_tight.2IV$Log_total_wealth<-pred.fitX.LZ.2IV.tight
+Pdd_tight.2IV.CCA<-Pdd_tight
+Pdd_tight.2IV.CCA$Log_total_wealth<-pred.fitX.LZ.2IV.tight.CCA
+Pdd_tight.SIV<-Pdd_tight
+Pdd_tight.SIV$Log_total_wealth<-pred.fitX.LZ.SIV.tight
+Pdd_tight.SIV.CCA<-Pdd_tight
+Pdd_tight.SIV.CCA$Log_total_wealth<-pred.fitX.LZ.SIV.tight.CCA
+Pdd_tight.3IV<-Pdd_tight
+Pdd_tight.3IV$Log_total_wealth<-pred.fitX.LZ.3IV.tight
+Pdd_tight.3IV.CCA<-Pdd_tight
+Pdd_tight.3IV.CCA$Log_total_wealth<-pred.fitX.LZ.3IV.tight.CCA
+
+
+Pdd_stight.1IV<-Pdd_stight
+Pdd_stight.1IV$Log_total_wealth<-pred.fitX.LZ.1IV.stight
+Pdd_stight.2IV<-Pdd_stight
+Pdd_stight.2IV$Log_total_wealth<-pred.fitX.LZ.2IV.stight
+Pdd_stight.2IV.CCA<-Pdd_stight
+Pdd_stight.2IV.CCA$Log_total_wealth<-pred.fitX.LZ.2IV.stight.CCA
+Pdd_stight.SIV<-Pdd_stight
+Pdd_stight.SIV$Log_total_wealth<-pred.fitX.LZ.SIV.stight
+Pdd_stight.SIV.CCA<-Pdd_stight
+Pdd_stight.SIV.CCA$Log_total_wealth<-pred.fitX.LZ.SIV.stight.CCA
+Pdd_stight.3IV<-Pdd_stight
+Pdd_stight.3IV$Log_total_wealth<-pred.fitX.LZ.3IV.stight
+Pdd_stight.3IV.CCA<-Pdd_stight
+Pdd_stight.3IV.CCA$Log_total_wealth<-pred.fitX.LZ.3IV.stight.CCA
+
+
+Pdd_loose.1IV<-Pdd_loose
+Pdd_loose.1IV$Log_total_wealth<-pred.fitX.LZ.1IV.loose
+Pdd_loose.2IV<-Pdd_loose
+Pdd_loose.2IV$Log_total_wealth<-pred.fitX.LZ.2IV.loose
+Pdd_loose.2IV.CCA<-Pdd_loose
+Pdd_loose.2IV.CCA$Log_total_wealth<-pred.fitX.LZ.2IV.loose.CCA
+Pdd_loose.SIV<-Pdd_loose
+Pdd_loose.SIV$Log_total_wealth<-pred.fitX.LZ.SIV.loose
+Pdd_loose.SIV.CCA<-Pdd_loose
+Pdd_loose.SIV.CCA$Log_total_wealth<-pred.fitX.LZ.SIV.loose.CCA
+Pdd_loose.3IV<-Pdd_loose
+Pdd_loose.3IV$Log_total_wealth<-pred.fitX.LZ.3IV.loose
+Pdd_loose.3IV.CCA<-Pdd_loose
+Pdd_loose.3IV.CCA$Log_total_wealth<-pred.fitX.LZ.3IV.loose.CCA
+
+Pdd_sloose.1IV<-Pdd_sloose
+Pdd_sloose.1IV$Log_total_wealth<-pred.fitX.LZ.1IV.sloose
+Pdd_sloose.2IV<-Pdd_sloose
+Pdd_sloose.2IV$Log_total_wealth<-pred.fitX.LZ.2IV.sloose
+Pdd_sloose.2IV.CCA<-Pdd_sloose
+Pdd_sloose.2IV.CCA$Log_total_wealth<-pred.fitX.LZ.2IV.sloose.CCA
+Pdd_sloose.SIV<-Pdd_sloose
+Pdd_sloose.SIV$Log_total_wealth<-pred.fitX.LZ.SIV.sloose
+Pdd_sloose.SIV.CCA<-Pdd_sloose
+Pdd_sloose.SIV.CCA$Log_total_wealth<-pred.fitX.LZ.SIV.sloose.CCA
+Pdd_sloose.3IV<-Pdd_sloose
+Pdd_sloose.3IV$Log_total_wealth<-pred.fitX.LZ.3IV.sloose
+Pdd_sloose.3IV.CCA<-Pdd_sloose
+Pdd_sloose.3IV.CCA$Log_total_wealth<-pred.fitX.LZ.3IV.sloose.CCA
+
+Pdd_flat.1IV<-Pdd_flat
+Pdd_flat.1IV$Log_total_wealth<-pred.fitX.LZ.1IV.flat
+Pdd_flat.2IV<-Pdd_flat
+Pdd_flat.2IV$Log_total_wealth<-pred.fitX.LZ.2IV.flat
+Pdd_flat.2IV.CCA<-Pdd_flat
+Pdd_flat.2IV.CCA$Log_total_wealth<-pred.fitX.LZ.2IV.flat.CCA
+Pdd_flat.SIV<-Pdd_flat
+Pdd_flat.SIV$Log_total_wealth<-pred.fitX.LZ.SIV.flat
+Pdd_flat.SIV.CCA<-Pdd_flat
+Pdd_flat.SIV.CCA$Log_total_wealth<-pred.fitX.LZ.SIV.flat.CCA
+Pdd_flat.3IV<-Pdd_flat
+Pdd_flat.3IV$Log_total_wealth<-pred.fitX.LZ.3IV.flat
+Pdd_flat.3IV.CCA<-Pdd_flat
+Pdd_flat.3IV.CCA$Log_total_wealth<-pred.fitX.LZ.3IV.flat.CCA
+```
+
+####
+
+#### Pred fitY.LX, get pred(Y)
+```{r}
+# original 
+pred.fitY.LX.1IV.original<-predict(fitY.LX.1IV,
+                                     newdata = Pdd,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.original<-predict(fitY.LX.2IV,
+                                     newdata = Pdd,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.original.CCA<-predict(fitY.LX.2IV.CCA,
+                                     newdata = Pdd,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.original<-predict(fitY.LX.SIV,
+                                     newdata = Pdd,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.original.CCA<-predict(fitY.LX.SIV.CCA,
+                                     newdata = Pdd,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.original<-predict(fitY.LX.3IV,
+                                     newdata = Pdd,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.original.CCA<-predict(fitY.LX.3IV.CCA,
+                                     newdata = Pdd,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+# tight
+pred.fitY.LX.1IV.tight<-predict(fitY.LX.1IV,
+                                     newdata = Pdd_tight.1IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.tight<-predict(fitY.LX.2IV,
+                                     newdata = Pdd_tight.2IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.tight.CCA<-predict(fitY.LX.2IV.CCA,
+                                     newdata = Pdd_tight.2IV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.tight<-predict(fitY.LX.SIV,
+                                     newdata = Pdd_tight.SIV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.tight.CCA<-predict(fitY.LX.SIV.CCA,
+                                     newdata = Pdd_tight.SIV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.tight<-predict(fitY.LX.3IV,
+                                     newdata = Pdd_tight.3IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.tight.CCA<-predict(fitY.LX.3IV.CCA,
+                                     newdata = Pdd_tight.3IV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+# slightly tight
+pred.fitY.LX.1IV.stight<-predict(fitY.LX.1IV,
+                                     newdata = Pdd_stight.1IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.stight<-predict(fitY.LX.2IV,
+                                     newdata = Pdd_stight.2IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+pred.fitY.LX.2IV.stight.CCA<-predict(fitY.LX.2IV.CCA,
+                                     newdata = Pdd_stight.2IV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+pred.fitY.LX.SIV.stight<-predict(fitY.LX.SIV,
+                                     newdata = Pdd_stight.SIV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.stight.CCA<-predict(fitY.LX.SIV.CCA,
+                                     newdata = Pdd_stight.SIV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.stight<-predict(fitY.LX.3IV,
+                                     newdata = Pdd_stight.3IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.stight.CCA<-predict(fitY.LX.3IV.CCA,
+                                     newdata = Pdd_stight.3IV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+# loose
+pred.fitY.LX.1IV.loose<-predict(fitY.LX.1IV,
+                                     newdata = Pdd_loose.1IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.loose<-predict(fitY.LX.2IV,
+                                     newdata = Pdd_loose.2IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.loose.CCA<-predict(fitY.LX.2IV.CCA,
+                                     newdata = Pdd_loose.2IV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.loose<-predict(fitY.LX.SIV,
+                                     newdata = Pdd_loose.SIV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.loose.CCA<-predict(fitY.LX.SIV.CCA,
+                                     newdata = Pdd_loose.SIV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.loose<-predict(fitY.LX.3IV,
+                                     newdata = Pdd_loose.3IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.loose.CCA<-predict(fitY.LX.3IV.CCA,
+                                     newdata = Pdd_loose.3IV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+# slightly loose
+pred.fitY.LX.1IV.sloose<-predict(fitY.LX.1IV,
+                                     newdata = Pdd_sloose.1IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.sloose<-predict(fitY.LX.2IV,
+                                     newdata = Pdd_sloose.2IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.sloose.CCA<-predict(fitY.LX.2IV.CCA,
+                                     newdata = Pdd_sloose.2IV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.sloose<-predict(fitY.LX.SIV,
+                                     newdata = Pdd_sloose.SIV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.sloose.CCA<-predict(fitY.LX.SIV.CCA,
+                                     newdata = Pdd_sloose.SIV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.sloose<-predict(fitY.LX.3IV,
+                                     newdata = Pdd_sloose.3IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.sloose.CCA<-predict(fitY.LX.3IV.CCA,
+                                     newdata = Pdd_sloose.3IV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+# flat
+pred.fitY.LX.1IV.flat<-predict(fitY.LX.1IV,
+                                     newdata = Pdd_flat.1IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.flat<-predict(fitY.LX.2IV,
+                                     newdata = Pdd_flat.2IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.2IV.flat.CCA<-predict(fitY.LX.2IV.CCA,
+                                     newdata = Pdd_flat.2IV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.flat<-predict(fitY.LX.SIV,
+                                     newdata = Pdd_flat.SIV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.SIV.flat.CCA<-predict(fitY.LX.SIV.CCA,
+                                     newdata = Pdd_flat.SIV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.flat<-predict(fitY.LX.3IV,
+                                     newdata = Pdd_flat.3IV,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+pred.fitY.LX.3IV.flat.CCA<-predict(fitY.LX.3IV.CCA,
+                                     newdata = Pdd_flat.3IV.CCA,
+                                     type = "response",
+                                     se.fit = FALSE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+```
+####
+
+#### Merge \hat{Y} into original data
+```{r}
+Pdd$yhat.1IV.original<-pred.fitY.LX.1IV.original
+Pdd$yhat.2IV.original<-pred.fitY.LX.2IV.original
+Pdd$yhat.2IV.original.CCA<-pred.fitY.LX.2IV.original.CCA
+Pdd$yhat.SIV.original<-pred.fitY.LX.SIV.original
+Pdd$yhat.SIV.original.CCA<-pred.fitY.LX.SIV.original.CCA
+Pdd$yhat.3IV.original<-pred.fitY.LX.3IV.original
+Pdd$yhat.3IV.original.CCA<-pred.fitY.LX.3IV.original.CCA
+
+Pdd$yhat.1IV.tight<-pred.fitY.LX.1IV.tight
+Pdd$yhat.2IV.tight<-pred.fitY.LX.2IV.tight
+Pdd$yhat.2IV.tight.CCA<-pred.fitY.LX.2IV.tight.CCA
+Pdd$yhat.SIV.tight<-pred.fitY.LX.SIV.tight
+Pdd$yhat.SIV.tight.CCA<-pred.fitY.LX.SIV.tight.CCA
+Pdd$yhat.3IV.tight<-pred.fitY.LX.3IV.tight
+Pdd$yhat.3IV.tight.CCA<-pred.fitY.LX.3IV.tight.CCA
+
+Pdd$yhat.1IV.stight<-pred.fitY.LX.1IV.stight
+Pdd$yhat.2IV.stight<-pred.fitY.LX.2IV.stight
+Pdd$yhat.2IV.stight.CCA<-pred.fitY.LX.2IV.stight.CCA
+Pdd$yhat.SIV.stight<-pred.fitY.LX.SIV.stight
+Pdd$yhat.SIV.stight.CCA<-pred.fitY.LX.SIV.stight.CCA
+Pdd$yhat.3IV.stight<-pred.fitY.LX.3IV.stight
+Pdd$yhat.3IV.stight.CCA<-pred.fitY.LX.3IV.stight.CCA
+
+Pdd$yhat.1IV.loose<-pred.fitY.LX.1IV.loose
+Pdd$yhat.2IV.loose<-pred.fitY.LX.2IV.loose
+Pdd$yhat.2IV.loose.CCA<-pred.fitY.LX.2IV.loose.CCA
+Pdd$yhat.SIV.loose<-pred.fitY.LX.SIV.loose
+Pdd$yhat.SIV.loose.CCA<-pred.fitY.LX.SIV.loose.CCA
+Pdd$yhat.3IV.loose<-pred.fitY.LX.3IV.loose
+Pdd$yhat.3IV.loose.CCA<-pred.fitY.LX.3IV.loose.CCA
+
+Pdd$yhat.1IV.sloose<-pred.fitY.LX.1IV.sloose
+Pdd$yhat.2IV.sloose<-pred.fitY.LX.2IV.sloose
+Pdd$yhat.2IV.sloose.CCA<-pred.fitY.LX.2IV.sloose.CCA
+Pdd$yhat.SIV.sloose<-pred.fitY.LX.SIV.sloose
+Pdd$yhat.SIV.sloose.CCA<-pred.fitY.LX.SIV.sloose.CCA
+Pdd$yhat.3IV.sloose<-pred.fitY.LX.3IV.sloose
+Pdd$yhat.3IV.sloose.CCA<-pred.fitY.LX.3IV.sloose.CCA
+
+Pdd$yhat.1IV.flat<-pred.fitY.LX.1IV.flat
+Pdd$yhat.2IV.flat<-pred.fitY.LX.2IV.flat
+Pdd$yhat.2IV.flat.CCA<-pred.fitY.LX.2IV.flat.CCA
+Pdd$yhat.SIV.flat<-pred.fitY.LX.SIV.flat
+Pdd$yhat.SIV.flat.CCA<-pred.fitY.LX.SIV.flat.CCA
+Pdd$yhat.3IV.flat<-pred.fitY.LX.3IV.flat
+Pdd$yhat.3IV.flat.CCA<-pred.fitY.LX.3IV.flat.CCA
+```
+
+```{r}
+data_3macro_simulate <- as.data.frame(Pdd)
+save(data_3macro_simulate, file = "/Users/ivyyang/Dropbox/cloud/Submitted papers/Data/Pdd_simu.rds")
+write.csv(data_3macro_simulate, file = "/Users/ivyyang/Dropbox/cloud/Submitted papers/Data/data_3macro_simu_for_graphs.csv", row.names = FALSE)
+```
+
+```{r}
+# On DELL
+data_3macro_simulate <- as.data.frame(Pdd)
+
+write.csv(data_3macro_simulate, file = "C:/Users/xxy350/Dropbox/cloud/Research/Empirical Work/Macro_factor_economic/data_3macro_simu_for_graphs.csv")
+```
+

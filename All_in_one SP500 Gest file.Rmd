@@ -1,0 +1,1918 @@
+---
+title: "G_est prediction"
+author: "Ivy Yang"
+date: "2024-02-13"
+output: html_document
+---
+# This file contains: 1. G-estimation with 3 macroeconomic variables, 2. Simulation of the shock from macro-environment, 3. Simulation of the shock from lump-sum endowment, 4. Estimation of the model with the simulated data, 5. Parallel regressions with Probit, Logit and Probit-IV, Logit-IV. 6.ROC-AUC scores. ####
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load data from MAC ####
+load(file = "/Users/ivyyang/Dropbox/cloud/Research/Empirical Work/Macro_factor_economic/d21_clean_data_clean_all_confoundings.rds")
+```
+```{r}
+# Load data from DELL ####
+load(file = "C:/Users/xxy350/Dropbox/cloud/Research/Empirical Work/Macro_factor_economic/d21_clean_data_clean_all_confoundings.rds")
+```
+
+
+```{r}
+require(data.table)
+require(psidR)
+require(plm)
+require(ivtools)
+require(stargazer)
+require(foreign)
+require(dplyr)
+library(ggthemes)  # For pretty_breaks
+library(pglm)
+library(ivreg)
+library(AER)
+library(pROC)
+require(tidyr)
+library(ggplot2)
+library(scales)
+```
+
+```{r}
+names(merged_data_21)
+# Rename interested confoundings ####
+merged_data <- merged_data_21 %>%
+  rename(
+    L.BusAppl = BABATOTALSAUS,
+    L.HouseInd = USSTHPI,
+    L.ExpMarket =SP500,
+    #L.ExpMarket = BOGZ1FA564091403A,
+    L.theta = NFCI
+  )
+```
+
+
+########################### Examine my data  ############################
+```{r}
+# count the number of households in each year ####
+merged_data %>% 
+  group_by(year) %>% 
+  summarise(n = n())
+```
+```{r}
+summary(merged_data$L.theta)
+
+merged_data %>%
+  group_by(year) %>%
+  summarise(mean_theta = mean(L.theta, na.rm = TRUE))
+```
+
+```{r}
+
+#count the number of households that Enter1_bus==1 each year ###
+merged_data %>% 
+  group_by(year) %>% 
+  summarise(n = sum(Enter1_bus))
+```
+```{r}
+```
+
+
+```{r}
+```
+
+```{r}
+# count the distinct pid ####
+length(unique(merged_data$pid))
+```
+
+########################### Simulation for 2021  ############################
+```{r}
+# decide which year to assign the shock
+shock_year <- 2021
+```
+
+```{r}
+# decide the amount of the shock
+lumpsum_shock<- 5000
+```
+
+```{r}
+# check for the lumpsum endowment
+summary(merged_data$lumpsum_endowment)
+```
+
+
+
+
+#########################################################################################
+#######.           OPTION I: Simulate the shock from macro-environment           #######
+####### Choose one of the following methods to simulate the shock from lump-sum  #######
+#########################################################################################
+
+# Simulation 1: all households receive simulated stimulus check ####
+```{r}
+
+# With the variable lumpsum_simulation, I simulated the stimulus check for 20,000$ at the year 2021 for all households.
+merged_data$lumpsum_simulation<-ifelse(merged_data$year==shock_year,
+                                       lumpsum_shock,merged_data$lumpsum_endowment)
+```
+# Simulation 2: Randomly assign the stimulus check to 20% 2021 households, the total amount is the same number as above ####
+```{r}
+
+# Set a seed for reproducibility
+set.seed(123) # Ensure reproducibility
+
+# Calculate the total amount to be distributed
+total_amount <- lumpsum_shock * length(unique(merged_data$pid[merged_data$year == shock_year]))
+
+# Identify the number of recipients, which is 20% of the unique households in 2021
+unique_households <- unique(merged_data$pid[merged_data$year == shock_year])
+num_recipients <- round(length(unique_households) * 0.2)
+
+# Randomly select recipient households
+recipient_pids <- sample(unique_households, num_recipients)
+
+# Generate random amounts that sum up to the total_amount
+set.seed(123) # Reset seed for consistency in random number generation
+random_amounts <- runif(num_recipients, min = 0, max = 1)
+random_amounts <- (random_amounts / sum(random_amounts)) * total_amount
+
+# Create a new column for the simulated lump sum, initialize with 0
+merged_data$lumpsum_simulation <- 0
+
+# Assign the random amounts to the selected households for the year 2021
+for(i in seq_along(recipient_pids)) {
+  pid <- recipient_pids[i]
+  amount <- random_amounts[i]
+  merged_data$lumpsum_simulation[merged_data$pid == pid & merged_data$year == shock_year] <- amount
+}
+
+# The other households retain their original lumpsum_endowment
+merged_data$lumpsum_simulation[!merged_data$pid %in% recipient_pids | merged_data$year != shock_year] <- merged_data$lumpsum_endowment[!merged_data$pid %in% recipient_pids | merged_data$year != shock_year]
+
+summary(merged_data%>% filter(year == 2021) %>% .$lumpsum_simulation)
+
+```
+# Simulation 3: equally assign the stimulus check to 20% 2021 households, the total amount is the same number as above ####
+```{r}
+
+# Set a seed for reproducibility
+set.seed(123) # Ensure reproducibility
+
+# Calculate the total amount to be distributed
+total_amount <- lumpsum_shock * length(unique(merged_data$pid[merged_data$year == shock_year]))
+
+# Identify the number of recipients, which is 20% of the unique households in 2021
+unique_households <- unique(merged_data$pid[merged_data$year == shock_year])
+num_recipients <- round(length(unique_households) * 0.2)
+
+# Randomly select recipient households
+recipient_pids <- sample(unique_households, num_recipients)
+
+equal_amts <- total_amount/num_recipients
+merged_data$lumpsum_simulation[merged_data$pid == recipient_pids & merged_data$year == shock_year] <- equal_amts
+
+# The other households retain their original lumpsum_endowment
+merged_data$lumpsum_simulation[!merged_data$pid %in% recipient_pids | merged_data$year != shock_year] <- merged_data$lumpsum_endowment[!merged_data$pid %in% recipient_pids | merged_data$year != shock_year]
+```
+
+# show the distribution of the simulated lumpsum in year 2021 ####
+```{r}
+summary(merged_data%>% filter(year == shock_year) %>% .$lumpsum_simulation)
+
+data_2021 <- merged_data %>% 
+  filter(year == shock_year)
+
+# Assuming data_2021 already exists
+data_long <- data_2021 %>%
+  pivot_longer(cols = c(lumpsum_simulation, lumpsum_endowment),
+               names_to = "variable",
+               values_to = "value")
+
+# Adjust 'value' for plotting 
+data_long$value <- data_long$value/1000
+```
+```{r}
+# Histogram for the simulated lumpsum vs true lumpsum in 2021 ####
+
+# Update the ggplot code with specified x-axis limits
+ggplot(data_long, aes(x = value, fill = variable)) +
+  geom_histogram(data = ~ subset(data_long, variable == "lumpsum_simulation"),
+                 binwidth = 0.5, alpha = 0.6, color = "blue") +
+  geom_histogram(data = ~ subset(data_long, variable == "lumpsum_endowment"),
+                 binwidth = 0.5, alpha = 0.6, color = "red") +
+  scale_fill_manual(values = c("lumpsum_simulation" = "blue", "lumpsum_endowment" = "red")) +
+  scale_x_continuous(labels = function(x) comma(x * 1000), breaks = pretty_breaks(n = 10), limits = c(0, 120)) +
+  labs(title = "Distribution of Lump Sum Simulation vs. Endowment for 2021",
+       x = "Value ($)",
+       y = "Frequency") +
+  theme_minimal()
+
+```
+
+```{r}
+# Density plot for the simulated lumpsum in 2021 ####
+summary(data_long$variable)
+
+ggplot(data_long, aes(x = value, fill = variable)) +  # 'value' is already in thousands
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("lumpsum_simulation" = "blue", "lumpsum_endowment" = "red")) +
+  scale_x_continuous(labels = scales::comma, breaks = scales::pretty_breaks(n = 3)) +
+  scale_y_continuous(limits = c(0, 0.3), labels = scales::percent) +
+  labs(title = "Density of Lump Sum Variables for 2021",
+       x = "Value (Thousands)",
+       y = "Density") +
+  theme_minimal()
+
+```
+
+```{r}
+# CDF plot for the simulated lumpsum in 2021 ####
+# Assuming 'data_2021' is your dataframe for the year 2021
+
+ggplot(data_long, aes(x = value, color = variable)) +  # Use color, not fill, for lines in stat_ecdf
+  stat_ecdf(geom = "step", aes(linetype = variable)) +  # Differentiate by linetype based on variable
+  scale_color_manual(values = c("lumpsum_simulation" = "blue", "lumpsum_endowment" = "red")) +
+  scale_x_continuous(labels = scales::comma, breaks = scales::pretty_breaks(n = 10)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(title = "CDF of Lump Sum Variables for 2021",
+       x = "Value (Thousands)",
+       y = "Cumulative Density") +
+  theme_minimal() +
+  guides(linetype = guide_legend(title = "Variable"), color = guide_legend(title = "Variable"))
+
+
+```
+
+
+
+#################################################################################################
+#######.           OPTION II: Simulate the shock from macro-environment           #######
+####### Choose one of the following methods to simulate the shock from macro-environment  #######
+#################################################################################################
+
+# Simulation 1: SP500 ####
+```{r}
+# Simulation 1.1: Large Cap ####
+merged_data$simu.L.ExpMarket<-ifelse(merged_data$year==shock_year,150000,merged_data$L.ExpMarket)
+```
+
+```{r}
+# Simulation 1.2: Large Cap ####
+merged_data$simu.L.ExpMarket<-ifelse(merged_data$year==shock_year,10000,merged_data$L.ExpMarket)
+```
+
+# Simulation 2:  credit environment ####
+```{r}
+# Simulation 2.1: tight theta ####
+merged_data$simu.L.theta<-ifelse(merged_data$year==shock_year,0.9,merged_data$L.theta)
+```
+
+```{r}
+# Simulation 2.2: loose theta ####
+merged_data$simu.L.theta<-ifelse(merged_data$year==shock_year,-0.9,merged_data$L.theta)
+```
+
+# Simulation 3: house index ####
+```{r}
+merged_data$simu.L.HouseInd<-ifelse(merged_data$year==shock_year,600,merged_data$L.HouseInd)
+```
+
+```{r}
+merged_data$simu.L.HouseInd<-ifelse(merged_data$year==shock_year,100,merged_data$L.HouseInd)
+```
+
+################################################################################
+
+################ This part is to get the real term, must run ###################
+
+################################################################################
+
+# Now I change the data in real terms
+```{r}
+# Inflate and deflate the variables
+summary(merged_data$CPIAUCSL)
+summary(merged_data$wealth)
+```
+
+```{r}
+# Set the benchmark year's CPI for 2019
+benchmark_cpi <- merged_data %>%
+  filter(year == 2019) %>%
+  summarise(mean_CPIAUCSL = mean(CPIAUCSL, na.rm = TRUE)) %>%
+  pull(mean_CPIAUCSL)
+
+# Calculate adjusted values for wealth, house_value, stock_value, and inherit
+data <- merged_data %>%
+  mutate(
+    adjusted_wealth = ifelse(
+      year < 2019,
+      wealth * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        wealth / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        wealth  # No change for the benchmark year
+      )
+    ),
+    adjusted_house_value = ifelse(
+      year < 2019,
+      house_value * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        house_value / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        house_value  # No change for the benchmark year
+      )
+    ),
+    adjusted_stock_value = ifelse(
+      year < 2019,
+      stock_value * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        stock_value / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        stock_value  # No change for the benchmark year
+      )
+    ),
+      adjusted_lumpsum_endowment = ifelse(
+      year < 2019,
+     lumpsum_endowment * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        lumpsum_endowment / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        lumpsum_endowment  # No change for the benchmark year
+      )
+    ),
+     L.HouseInd = ifelse(
+      year < 2019,
+      L.HouseInd * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        L.HouseInd / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        L.HouseInd  # No change for the benchmark year
+      )
+    ),
+     L.ExpMarket = ifelse(
+      year < 2019,
+      L.ExpMarket * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+         L.ExpMarket / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+         L.ExpMarket  # No change for the benchmark year
+      )
+    )
+  )
+
+```
+
+```{r}
+# Option 1: simulated lumpsum ####
+data<-data %>%
+  mutate(
+    adjusted_lumpsum_simulation = ifelse(
+      year < 2019,
+      lumpsum_simulation * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        lumpsum_simulation / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        lumpsum_simulation  # No change for the benchmark year
+      )
+    )
+  )
+```
+
+```{r}
+# Option 2: simulated macro shock - big Cap ####
+data<-data%>%
+  mutate(simu.L.ExpMarket = ifelse(
+      year < 2019,
+      simu.L.ExpMarket * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        simu.L.ExpMarket / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        simu.L.ExpMarket  # No change for the benchmark year
+      )
+    )
+    )
+```
+
+
+```{r}
+
+# Option 2: simulated macro shock - house index ####
+data<-data %>%
+  mutate(simu.L.HouseInd = ifelse(
+      year < 2019,
+      simu.L.HouseInd * (benchmark_cpi / CPIAUCSL),  # Inflate past years
+      ifelse(
+        year > 2019,
+        simu.L.HouseInd / (CPIAUCSL / benchmark_cpi),  # Deflate future years
+        simu.L.HouseInd  # No change for the benchmark year
+      )
+    )
+  )
+```
+
+# put the similated lumpsum into the inverse hyperbolic sine scale ####
+```{r}
+
+# Inverse Hyperbolic Sine Transformation
+data <- data %>%
+  mutate(
+    wealth = asinh(adjusted_wealth),
+    lumpsum_endowment = asinh(adjusted_lumpsum_endowment),
+    stock_value = asinh(adjusted_stock_value),
+    house_value = asinh(adjusted_house_value)
+  )
+```
+
+```{r}
+# Option 1: simulate lumpsum ####
+data$lumpsum_simulation = asinh(data$adjusted_lumpsum_simulation)
+```
+####
+
+
+```{r}
+print("~~~~~~ adjusted wealth ~~~~~~")
+summary(data$adjusted_wealth)
+
+print("~~~~~~ adjusted lumpsum endowment ~~~~~~")
+summary(data$adjusted_lumpsum_endowment)
+
+print("~~~~~~ adjusted stock value ~~~~~~")
+summary(data$adjusted_stock_value)
+
+print("~~~~~~ adjusted house value ~~~~~~")
+summary(data$adjusted_house_value)
+```
+```{r}
+# option 1: simulated lumpsum ####
+summary(data$adjusted_lumpsum_simulation)
+```
+
+#################### Generate panel data at different time windows ##############
+```{r}
+# Convert into panel data
+Pdd21<-pdata.frame(subset(data,year!=2009),index = c("pid","year"))
+Pdd19 <- pdata.frame(subset(data, !(year == 2009 | year == 2021)), index = c("pid", "year"))
+Pdd17 <- pdata.frame(subset(data, year != 2009 & year <= 2017), index = c("pid", "year"))
+Pdd15 <- pdata.frame(subset(data, year != 2009 & year <= 2015), index = c("pid", "year"))
+Pdd13 <- pdata.frame(subset(data, year != 2009 & year <= 2013), index = c("pid", "year"))
+Pdd11 <- pdata.frame(subset(data, year != 2009 & year <= 2011), index = c("pid", "year"))
+Pdd09 <- pdata.frame(subset(data, year <= 2009), index = c("pid", "year"))
+Pdd07 <- pdata.frame(subset(data, year <= 2007), index = c("pid", "year"))
+Pdd05 <- pdata.frame(subset(data, year <= 2005), index = c("pid", "year"))
+```
+
+```{r}
+# Save the data for graphing ####
+save(Pdd19, file = "~/Dropbox/cloud/Research/Research 2022/JMP empirical/data/Pdd19.rds")
+save(Pdd21, file = "~/Dropbox/cloud/Research/Research 2022/JMP empirical/data/Pdd21.rds")
+```
+
+
+
+#### PART I: Estimation, set up the empirical model ####
+
+#### Check for variables created ####
+```{r}
+# this should show the same result ####
+print("~~~~~~lumpsum endowment~~~~~~")
+summary(Pdd19$lumpsum_endowment)
+print("~~~~~~inherit~~~~~~")
+summary(Pdd19$inherit)
+```
+
+#### Define functions ####
+
+```{r}
+# First stage regressions ####
+Function_wealth_1<-wealth~D_bus_fam_experience+L.theta+D_college + lumpsum_endowment # pure shock on wealth, confouding with family education, and ability.
+
+Function_wealth_2<-wealth~D_college + L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket + house_value*D_2house+stock_value*D_stock  # This is a shock by investment, confounding with macroeconomic variables
+
+Function_wealth_stock<-wealth~D_college + L.theta+ L.BusAppl+ L.ExpMarket +stock_value*D_stock  # This is a shock by investment, confounding with macroeconomic variables
+
+Function_wealth_3<-Log_total_wealth~D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket + house_value*D_2house+stock_value*D_stock + lumpsum_endowment # Benchmark confouding with both macro and individual level variables.
+```
+
+
+```{r}
+# Second stage regressions ####
+Function_Enter.1IV<-Enter1_bus~D_bus_fam_experience+D_college  +L.theta+ wealth+D_black+D_gender+D_married
+
+Function_Enter.2IV<-Enter1_bus~D_college + L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket+ wealth+D_college+D_black+D_gender+D_married
+
+Function_Enter.IV.stock<-Enter1_bus~D_college + L.theta+ L.BusAppl+ L.ExpMarket+ wealth+D_college+D_black+D_gender+D_married
+
+Function_Enter.3IV<-Enter1_bus~D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket +wealth+D_college+D_black+D_gender+D_married
+
+#Function_Enter.1IV<-Enter1_bus~L.NFCI + L.GDP + L.PRS85006091
+```
+
+
+##########  G-est: Original estimation, without stimulus check ############
+```{r}
+# Define which dataset I will use for run the model
+Pdd_data <- Pdd19 # Use the dataset which is one year ealier than shock year
+```
+
+
+```{r}
+# X.LZ ####
+# whole data
+fitX.LZ.1IV<-glm(formula = Function_wealth_1,data = Pdd_data)
+fitX.LZ.2IV<-glm(formula = Function_wealth_2,data = Pdd_data)
+fitX.LZ.stock<-glm(formula = Function_wealth_stock,data = Pdd_data)
+fitX.LZ.3IV<-glm(formula = Function_wealth_3,data = Pdd_data)
+```
+
+```{r}
+# Y.LX ####
+# full
+fitY.LX.1IV<-glm(formula = Function_Enter.1IV, family = "binomial"(link = "logit"), data = Pdd_data)
+
+fitY.LX.2IV<-glm(formula = Function_Enter.2IV, family = "binomial"(link = "logit"), data = Pdd_data)
+
+fitY.LX.IV.stock<-glm(formula = Function_Enter.IV.stock, family = "binomial"(link = "logit"), data = Pdd_data)
+
+fitY.LX.3IV<-glm(formula = Function_Enter.3IV, family = "binomial"(link = "logit"), data = Pdd_data)
+```
+
+```{r}
+# Z.L ####
+# full
+fitZ.L.1IV<-glm(formula = lumpsum_endowment~ D_bus_fam_experience+D_college+L.theta, family = "gaussian", data=Pdd_data)
+
+fitZ.L.2IV<-glm(formula = house_value*D_2house + stock_value*D_stock ~ D_college + L.theta+ L.BusAppl+ L.HouseInd+L.ExpMarket, family = "gaussian", data=Pdd_data)
+
+fitZ.L.2IV.stock<-glm(formula = stock_value*D_stock ~ D_college + L.theta+ L.BusAppl+ L.ExpMarket, family = "gaussian", data=Pdd_data)
+
+fitZ.L.3IV<-glm(formula = house_value*D_2house + stock_value*D_stock+ lumpsum_endowment ~ D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket, family = "gaussian", data=Pdd_data)
+```
+
+
+```{r}
+# Y.LZX ####
+# Y~LZX full ####
+fitY.LZX.1IV<-glm(formula = Enter1_bus ~  D_bus_fam_experience+D_college+L.theta +lumpsum_endowment+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_data)
+
+fitY.LZX.2IV<-glm(formula = Enter1_bus ~ D_college + L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket +house_value*D_2house + stock_value*D_stock+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_data)
+
+fitY.LZX.IV.stock<-glm(formula = Enter1_bus ~ D_college + L.theta+ L.BusAppl+ L.ExpMarket +stock_value*D_stock+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_data)
+
+fitY.LZX.3IV<-glm(formula = Enter1_bus ~ D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket +house_value*D_2house + stock_value*D_stock+lumpsum_endowment+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_data)
+```
+
+```{r}
+# G-estimation results ####
+G.fambus.1IV.full<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.1IV, 
+                             fitY.LZX = fitY.LZX.1IV,
+                             link = "identity", 
+                             data = Pdd_data,
+                             formula = ~L.theta + D_bus_fam_experience + D_college)
+```
+
+```{r}
+G.macro.2IV.full<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.2IV, 
+                             fitY.LZX = fitY.LZX.2IV,
+                             link = "identity", 
+                             data = Pdd_data,
+                             formula = ~ L.theta + L.ExpMarket+ L.HouseInd+D_college)
+```
+
+```{r}
+G.macro.IV.stock<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.2IV.stock, 
+                             fitY.LZX = fitY.LZX.IV.stock,
+                             link = "identity", 
+                             data = Pdd_data,
+                             formula = ~ L.theta+ L.ExpMarket+D_college)
+```
+
+
+```{r}
+G.all.3IV.full<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.3IV, 
+                             fitY.LZX = fitY.LZX.3IV,
+                             link = "identity", 
+                             data = Pdd_data,
+                             formula = ~ D_bus_fam_experience+ L.theta+ L.ExpMarket+ L.HouseInd+ D_college)
+```
+
+
+```{r}
+# Summary the G-estimation results ####
+print("------IV-inheritance--------")
+summary(G.fambus.1IV.full)
+
+print("------ financial IVs--------")
+summary(G.macro.2IV.full)
+print("------ stock IVs--------")
+summary(G.macro.IV.stock)
+print("------ all3 IVs--------")
+summary(G.all.3IV.full)
+```
+
+```{r}
+# Two stages result ####
+
+# 1. with only Log_inheritance IV
+# full
+IV1.fambus.full<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.1IV, 
+                             fitY.LX = fitY.LX.1IV,
+                             family="binomial", 
+                             data = Pdd_data,
+                             ctrl = TRUE)
+summary(IV1.fambus.full)
+```
+
+```{r}
+# 2. with financial assets IV
+# full
+IV2.macro.full<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.2IV, 
+                             fitY.LX = fitY.LX.2IV,
+                             family="binomial", 
+                             data = Pdd_data,
+                             ctrl = TRUE)
+summary(IV2.macro.full)
+```
+```{r}
+IV2.macro.stock<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.stock, 
+                             fitY.LX = fitY.LX.IV.stock,
+                             family="binomial", 
+                             data = Pdd_data,
+                             ctrl = TRUE)
+summary(IV2.macro.stock)
+```
+
+
+```{r}
+# 3. with financial assets IV + inherit
+# full
+IV3.all.full<- ivglm(estmethod = "ts", 
+                             X="wealth",
+                             fitX.LZ = fitX.LZ.3IV, 
+                             fitY.LX = fitY.LX.3IV,
+                             family="binomial"(link = "logit"), 
+                             data = Pdd_data,
+                             ctrl = TRUE)
+summary(IV3.all.full)
+```
+
+
+# marginal effect ####
+```{r}
+library(margins)
+# full ####
+# This is the marginal effect of asinh(wealth) in the second step
+# Calculate individual marginal effects for asinh(wealth)
+individual_margins.wealth.1IV <- margins(fitY.LZX.1IV, variables = "wealth")
+individual_margins.wealth.2IV <- margins(fitY.LZX.2IV, variables = "wealth")
+individual_margin.wealth.stock<- margins(fitY.LZX.IV.stock, variables = "wealth")
+individual_margins.wealth.3IV <- margins(fitY.LZX.3IV, variables = "wealth")
+
+individual_margins.theta.1IV <- margins(fitY.LZX.1IV, variables = "L.theta")
+individual_margins.theta.2IV <- margins(fitY.LZX.2IV, variables = "L.theta")
+individual_margins.theta.stock<- margins(fitY.LZX.IV.stock, variables = "L.theta")
+individual_margins.theta.3IV <- margins(fitY.LZX.3IV, variables = "L.theta")
+
+# Calculate the average marginal effect
+avg_marginal_effect.wealth.1IV <- mean(individual_margins.wealth.1IV$dydx_wealth)
+avg_marginal_effect.wealth.2IV <- mean(individual_margins.wealth.2IV$dydx_wealth)
+avg_marginal_effect.wealth.stock<- mean(individual_margin.wealth.stock$dydx_wealth)
+avg_marginal_effect.wealth.3IV <- mean(individual_margins.wealth.3IV$dydx_wealth)
+
+avg_marginal_effect.theta.1IV <- mean(individual_margins.theta.1IV$dydx_L.theta)
+avg_marginal_effect.theta.2IV <- mean(individual_margins.theta.2IV$dydx_L.theta)
+avg_marginal_effect.theta.stock<- mean(individual_margins.theta.stock$dydx_L.theta)
+avg_marginal_effect.theta.3IV <- mean(individual_margins.theta.3IV$dydx_L.theta)
+```
+
+```{r}
+# Print the average marginal effect of asinh(wealth)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth if IV is only inheritance (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.1IV)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth if IV is only financial assets (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.2IV)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth if IV is the stock (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.stock)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth  if IV is the combination (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.3IV)
+print("Log_wealth level")
+summary(Pdd_data$wealth)
+```
+
+```{r}
+# Print the average marginal effect of theta
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is only inheritance (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.1IV)
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is only financial assets (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.2IV)
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is the stock (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.stock)
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is the combination (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.3IV)
+print("Log_wealth level")
+summary(Pdd_data$L.theta)
+```
+
+###### Simulation for a lumpsum endowment of 5,000 ####
+
+###############################################################################
+############              Simulation starts here                   ############
+###############################################################################
+```{r}
+
+# Generate new dataset for simulation ####
+# Pertubation year is year Pdd_data+1, the same year of the shock year
+Pdd_pertubation<-Pdd21
+```
+
+# Simulation for lumpsum endowment ####
+```{r}
+Pdd_pertubation$lumpsum_endowment<-Pdd_pertubation$lumpsum_simulation
+```
+
+# Simulation for macro-environment ####
+```{r}
+# Simulation 1: L.ExpMarket ####
+Pdd_pertubation$L.ExpMarket<-Pdd_pertubation$simu.L.ExpMarket
+```
+
+```{r}
+# Simulation 2: credit environment ####
+Pdd_pertubation$L.theta<-Pdd_pertubation$simu.L.theta
+```
+
+```{r}
+# Simulation 3: house index ####
+Pdd_pertubation$L.HouseInd<-Pdd_pertubation$simu.L.HouseInd
+```
+
+
+
+
+```{r}
+#### Pred fitX.LZ, get \hat{x} 
+
+# Get predicted \hat{x} for a simulated stimulus check of 5000$. the house prices and stock markets are the true value ####
+pred.fitX.LZ.1IV<-predict(fitX.LZ.1IV,
+                                        newdata = Pdd_pertubation, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV<-predict(fitX.LZ.2IV,
+                                        newdata = Pdd_pertubation, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.IV.stock<-predict(fitX.LZ.stock,
+                                        newdata = Pdd_pertubation, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+
+pred.fitX.LZ.3IV<-predict(fitX.LZ.3IV,
+                                        newdata = Pdd_pertubation, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+```
+
+
+```{r}
+summary(pred.fitX.LZ.1IV)
+```
+
+
+####
+
+####  Include predicted x into data set (for simulated L) 
+```{r}
+Pdd_pertubation.1IV<-Pdd_pertubation
+Pdd_pertubation.1IV$wealth<-pred.fitX.LZ.1IV
+
+Pdd_pertubation.2IV<-Pdd_pertubation
+Pdd_pertubation.2IV$wealth<-pred.fitX.LZ.2IV
+
+Pdd_pertubation.stock<-Pdd_pertubation
+Pdd_pertubation.stock$wealth<-pred.fitX.LZ.IV.stock
+
+Pdd_pertubation.3IV<-Pdd_pertubation
+Pdd_pertubation.3IV$wealth<-pred.fitX.LZ.3IV
+```
+
+```{r}
+#### Pred fitY.LX, get pred(Y)
+# original 
+pred.fitY.LX.1IV<-predict(fitY.LX.1IV,
+                                     newdata = Pdd_pertubation.1IV,
+                                     type = "response",
+                                     se.fit = TRUE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+pred.fitY.LX.2IV<-predict(fitY.LX.2IV,
+                                     newdata = Pdd_pertubation.2IV,
+                                     type = "response",
+                                     se.fit = TRUE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+pred.fitY.LX.IV.stock<-predict(fitY.LX.IV.stock,
+                                     newdata = Pdd_pertubation.stock,
+                                     type = "response",
+                                     se.fit = TRUE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+pred.fitY.LX.3IV<-predict(fitY.LX.3IV,
+                                     newdata = Pdd_pertubation.3IV,
+                                     type = "response",
+                                     se.fit = TRUE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+```
+
+```{r}
+summary(pred.fitY.LX.1IV)
+```
+
+```{r}
+```
+
+
+# I will only draw for the heirs model ####
+# Assuming a normal distribution for large sample sizes
+```{r}
+# prediction for lumpsum simulation ####
+critical_value <- qnorm(0.975)  # for a 95% confidence interval
+lower_heirs <- pred.fitY.LX.1IV$fit - critical_value * pred.fitY.LX.1IV$se.fit
+upper_heirs <- pred.fitY.LX.1IV$fit + critical_value * pred.fitY.LX.1IV$se.fit
+```
+
+```{r}
+# prediction for macro indexes ####
+critical_value <- qnorm(0.975)  # for a 95% confidence interval
+lower_investors <- pred.fitY.LX.2IV$fit - critical_value * pred.fitY.LX.2IV$se.fit
+upper_investors <- pred.fitY.LX.2IV$fit + critical_value * pred.fitY.LX.2IV$se.fit
+```
+
+# put the predicted output back to the dataset ####
+```{r}
+# prediction for lumpsum simulation ####
+Pdd_pertubation.1IV$pred.Enter1_bus<-pred.fitY.LX.1IV$fit
+Pdd_pertubation.1IV$pred.lower_bound_heirs<-lower_heirs
+Pdd_pertubation.1IV$pred.upper_bound_heirs<-upper_heirs
+summary(Pdd_pertubation.1IV$pred.Enter1_bus)
+```
+
+```{r}
+# prediction for macro indexes ####
+Pdd_pertubation.2IV$pred.Enter1_bus<-pred.fitY.LX.2IV$fit
+Pdd_pertubation.2IV$pred.lower_bound_investors<-lower_investors
+Pdd_pertubation.2IV$pred.upper_bound_investors<-upper_investors
+summary(Pdd_pertubation.2IV$pred.Enter1_bus)
+```
+
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+```
+
+# Plot shock from lumpsum endowment - 1IV ####
+```{r}
+# Ensure 'year' is numeric
+Pdd_pertubation.1IV$year <- as.numeric(as.character(Pdd_pertubation.1IV$year))
+
+# Aggregate data by year and remove the year 1999
+annual_averages <- Pdd_pertubation.1IV %>%
+  group_by(year) %>%
+  summarize(average_Enter1_bus = mean(Enter1_bus, na.rm = TRUE)) %>%
+  filter(year != 1999)  # Exclude the year 1999
+
+# Filter the data for years 2019 onwards to plot the confidence interval
+data_heirs <- Pdd_pertubation.1IV %>%
+  filter(year >= 2019)
+
+# Plot with line and ribbon, excluding data points for the year 1999
+plot_pred_heirs<-ggplot() +
+  geom_line(data = annual_averages, aes(x = year, y = average_Enter1_bus), color = "blue") +  # Line for averaged values
+  geom_point(data = annual_averages, aes(x = year, y = average_Enter1_bus), color = "blue") +  # Points for each year, excluding 1999
+  geom_ribbon(data = data_heirs, aes(x = year, ymin = pred.lower_bound_heirs, ymax = pred.upper_bound_heirs), fill = "orange", alpha = 0.2) +  # Confidence interval ribbon
+  scale_x_continuous(breaks = c(2001, 2003, 2005, 2007, 2009, 2011, 2013, 2015, 2017, 2019, 2021)) +  # Exclude 1999 from x-axis breaks
+  scale_y_continuous(limits = c(0, 0.1), breaks = seq(0, 0.1, by = 0.01)) +  # Set y-axis limits and breaks for grid lines
+  labs(title = "Predicted vs. Actual Entrepreneurial Entry",
+       x = "Year",
+       y = "P(enter)") +
+  theme_minimal()
+```
+
+```{r}
+print(plot_pred_heirs)
+```
+
+
+# Plot shock from macroeconomics - 2IV ####
+```{r}
+# Ensure 'year' is numeric
+Pdd_pertubation.2IV$year <- as.numeric(as.character(Pdd_pertubation.2IV$year))
+
+# Aggregate data by year and remove the year 1999
+annual_averages <- Pdd_pertubation.2IV %>%
+  group_by(year) %>%
+  summarize(average_Enter1_bus = mean(Enter1_bus, na.rm = TRUE)) %>%
+  filter(year != 1999)  # Exclude the year 1999
+
+# Filter the data for years 2019 onwards to plot the confidence interval
+data_investors <- Pdd_pertubation.2IV %>%
+  filter(year >= 2019)
+
+# Plot with line and ribbon, excluding data points for the year 1999
+plot_pred_investors<-ggplot() +
+  geom_line(data = annual_averages, aes(x = year, y = average_Enter1_bus), color = "blue") +  # Line for averaged values
+  geom_point(data = annual_averages, aes(x = year, y = average_Enter1_bus), color = "blue") +  # Points for each year, excluding 1999
+  geom_ribbon(data = data_investors, aes(x = year, ymin = pred.lower_bound_investors, ymax = pred.upper_bound_investors), fill = "orange", alpha = 0.2) +  # Confidence interval ribbon
+  scale_x_continuous(breaks = c(2001, 2003, 2005, 2007, 2009, 2011, 2013, 2015, 2017, 2019, 2021)) +  # Exclude 1999 from x-axis breaks
+  scale_y_continuous(limits = c(0, 0.1), breaks = seq(0, 0.1, by = 0.01)) +  # Set y-axis limits and breaks for grid lines
+  labs(title = "P(Enter) prediction for 2021 with simulated tight credit environment in investors",
+       x = "Year",
+       y = "P(enter)") +
+  theme_minimal()
+```
+
+```{r}
+print(plot_pred_investors)
+```
+```{r}
+
+```
+
+```{r}
+# Contrast the two plots
+library(gridExtra)
+grid.arrange(plot_pred_heirs, plot_pred_investors, ncol = 2)
+
+
+# Adjusted plot code to include aesthetic mapping for fill
+plot_pred_both <- ggplot() +
+  geom_line(data = annual_averages, aes(x = year, y = average_Enter1_bus, group = 1), color = "blue") +  # Line for averaged values
+  geom_point(data = annual_averages, aes(x = year, y = average_Enter1_bus, group = 1), color = "blue") +  # Points for each year, excluding 1999
+  geom_ribbon(data = data_heirs, aes(x = year, ymin = pred.lower_bound_heirs, ymax = pred.upper_bound_heirs, fill = "Heirs"), alpha = 0.2) + 
+  geom_ribbon(data = data_investors, aes(x = year, ymin = pred.lower_bound_investors, ymax = pred.upper_bound_investors, fill = "Investors"), alpha = 0.2) +
+  scale_fill_manual(values = c("Heirs" = "purple", "Investors" = "orange")) +  # Manually set fill colors with legend labels
+  scale_x_continuous(breaks = c(2001, 2003, 2005, 2007, 2009, 2011, 2013, 2015, 2017, 2019, 2021)) +
+  scale_y_continuous(limits = c(0, 0.1), breaks = seq(0, 0.1, by = 0.01)) +
+  labs(title = "P(Enter) 95% CI prediction for 2021 with simulated loose credit environment",
+       x = "Year",
+       y = "P(enter)") +
+  theme_minimal() +
+  theme(legend.position = "right")  # Position the legend on the right
+
+# Display the plot
+print(plot_pred_both)
+
+```
+
+
+
+```{r}
+```
+
+# display the result with true estimation with year 2021
+```{r}
+# Z.L ####
+# full
+fitZ.L.1IV.ext<-glm(formula = lumpsum_endowment~ D_bus_fam_experience + D_college + L.theta, family = "gaussian", data=Pdd21)
+
+fitZ.L.2IV.ext<-glm(formula = house_value*D_2house + stock_value*D_stock ~ D_college + L.theta + L.BusAppl + L.HouseInd + L.ExpMarket, family = "gaussian", data=Pdd21)
+
+fitZ.L.IV.ext.stock<-glm(formula = stock_value*D_stock ~ D_college + L.theta + L.BusAppl + L.ExpMarket, family = "gaussian", data=Pdd21)
+
+fitZ.L.3IV.ext<-glm(formula = house_value*D_2house + stock_value*D_stock + Log_lumpsum_endowment ~ D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket, family = "gaussian", data=Pdd21)
+
+
+# Y.LZX ####
+# Y~LZX full ####
+fitY.LZX.1IV.ext<-glm(formula = Enter1_bus ~  D_bus_fam_experience + D_college + L.theta + lumpsum_endowment+ wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd21)
+
+fitY.LZX.2IV.ext<-glm(formula = Enter1_bus ~ D_college + L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket + house_value*D_2house + stock_value*D_stock + wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd21)
+
+fitY.LZX.IV.ext.stock<-glm(formula = Enter1_bus ~ D_college + L.theta+ L.BusAppl+ L.ExpMarket + stock_value*D_stock + wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd21)
+
+fitY.LZX.3IV.ext<-glm(formula = Enter1_bus ~ D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket + house_value*D_2house + stock_value*D_stock + lumpsum_endowment+ wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd21)
+```
+
+```{r}
+# G-estimation results ####
+G.fambus.1IV.ext<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.1IV.ext, 
+                             fitY.LZX = fitY.LZX.1IV.ext,
+                             link = "identity", 
+                             data = Pdd21,
+                             formula = ~ D_bus_fam_experience+L.theta+D_college)
+G.fambus.2IV.ext<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.2IV.ext, 
+                             fitY.LZX = fitY.LZX.2IV.ext,
+                             link = "identity", 
+                             data = Pdd21,
+                             formula = ~ L.theta+D_college+L.HouseInd+L.ExpMarket)
+G.fambus.IV.ext.stock<- ivglm(estmethod = "g",
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.IV.ext.stock, 
+                             fitY.LZX = fitY.LZX.IV.ext.stock,
+                             link = "identity", 
+                             data = Pdd21,
+                             formula = ~ L.theta+D_college+L.ExpMarket)
+G.all.3IV.ext<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.3IV, 
+                             fitY.LZX = fitY.LZX.3IV.ext,
+                             link = "identity", 
+                             data = Pdd21,
+                             formula = ~ D_bus_fam_experience+ L.theta+ L.ExpMarket+ L.HouseInd+ D_college)
+```
+
+# marginal effect ####
+```{r}
+library(margins)
+# full ####
+# This is the marginal effect of asinh(wealth) in the second step
+# Calculate individual marginal effects for Log_total_wealth
+individual_margins.wealth.1IV.ext <- margins(fitY.LZX.1IV.ext, variables = "wealth")
+individual_margins.wealth.2IV.ext <- margins(fitY.LZX.1IV.ext, variables = "wealth")
+individual_margins.wealth.ext.stock<- margins(fitY.LZX.IV.ext.stock, variables = "wealth")
+individual_margins.wealth.3IV.ext <- margins(fitY.LZX.3IV.ext, variables = "wealth")
+
+individual_margins.theta.1IV.ext <- margins(fitY.LZX.1IV.ext, variables = "L.theta")
+individual_margins.theta.2IV.ext <- margins(fitY.LZX.1IV.ext, variables = "L.theta")
+individual_margins.theta.ext.stock<- margins(fitY.LZX.IV.ext.stock, variables = "L.theta")
+individual_margins.theta.3IV.ext <- margins(fitY.LZX.3IV.ext, variables = "L.theta")
+
+# Calculate the average marginal effect
+avg_marginal_effect.wealth.1IV.ext <- mean(individual_margins.wealth.1IV.ext$dydx_wealth)
+avg_marginal_effect.wealth.2IV.ext <- mean(individual_margins.wealth.2IV.ext$dydx_wealth)
+avg_marginal_effect.wealth.ext.stock<- mean(individual_margins.wealth.ext.stock$dydx_wealth)
+avg_marginal_effect.wealth.3IV.ext <- mean(individual_margins.wealth.3IV.ext$dydx_wealth)
+
+avg_marginal_effect.theta.1IV.ext <- mean(individual_margins.theta.1IV.ext$dydx_L.theta)
+avg_marginal_effect.theta.2IV.ext <- mean(individual_margins.theta.2IV.ext$dydx_L.theta)
+avg_marginal_effect.theta.ext.stock<- mean(individual_margins.theta.ext.stock$dydx_L.theta)
+avg_marginal_effect.theta.3IV.ext<- mean(individual_margins.theta.3IV.ext$dydx_L.theta)
+```
+
+```{r}
+# Print the average marginal effect of theta
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is only inheritance (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.1IV.ext)
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is only financial assets (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.2IV.ext)
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is the stock (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.ext.stock)
+print("~~~~~~~~~ average marginal effect on growth rate of theta if IV is the combination (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.theta.3IV.ext)
+print("Log_wealth level")
+summary(Pdd21$L.theta)
+```
+
+```{r}
+# Print the average marginal effect of asinh(wealth)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth if IV is only inheritance (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.1IV.ext)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth if IV is only financial assets (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.2IV.ext)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth if IV is the stock (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.ext.stock)
+print("~~~~~~~~~ average marginal effect on growth rate of wealth  if IV is the combination (step 2)~~~~~~~~~~~~~")
+summary(avg_marginal_effect.wealth.3IV.ext)
+print("Log_wealth level")
+summary(Pdd_data$wealth)
+```
+
+# Display the result with simulated lumpsum-endowment ####
+```{r}
+# Z.L ####
+# full
+fitZ.L.1IV.simu<-glm(formula = lumpsum_endowment~ D_bus_fam_experience+D_college+L.theta+L.ExpMarket, family = "gaussian", data=Pdd_pertubation)
+
+fitZ.L.2IV.simu<-glm(formula = house_value*D_2house+stock_value*D_stock ~ D_college + L.theta+ L.BusAppl+ L.HouseInd+L.ExpMarket, family = "gaussian", data=Pdd_pertubation)
+
+fitZ.L.IV.simu.stock<-glm(formula = stock_value*D_stock ~ D_college + L.theta+ L.BusAppl+ L.ExpMarket, family = "gaussian", data=Pdd_pertubation)
+
+fitZ.L.3IV.simu<-glm(formula = house_value*D_2house+stock_value*D_stock+lumpsum_endowment ~ D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket, family = "gaussian", data=Pdd_pertubation)
+
+
+# Y.LZX ####
+# Y~LZX full ####
+fitY.LZX.1IV.simu<-glm(formula = Enter1_bus ~  D_bus_fam_experience + D_college + L.theta +lumpsum_endowment+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_pertubation)
+
+fitY.LZX.2IV.simu<-glm(formula = Enter1_bus ~ D_college + L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket +house_value*D_2house+stock_value*D_stock+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_pertubation)
+
+fitY.LZX.IV.simu.stock<-glm(formula = Enter1_bus ~ D_college + L.theta+ L.BusAppl+ L.ExpMarket +stock_value*D_stock+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_pertubation)
+
+fitY.LZX.3IV.simu<-glm(formula = Enter1_bus ~ D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket + house_value*D_2house+stock_value*D_stock+ lumpsum_endowment+ wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_pertubation)
+```
+
+```{r}
+# G-estimation results ####
+G.fambus.1IV.simu<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.1IV.simu, 
+                             fitY.LZX = fitY.LZX.1IV.simu,
+                             link = "identity", 
+                             data = Pdd_pertubation,
+                             formula = ~ D_bus_fam_experience+L.theta)
+G.fambus.2IV.simu<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.2IV.simu, 
+                             fitY.LZX = fitY.LZX.2IV.simu,
+                             link = "identity", 
+                             data = Pdd_pertubation,
+                             formula = ~ L.theta+D_college+L.HouseInd+L.ExpMarket)
+
+G.fambus.IV.simu.stock<- ivglm(estmethod = "g",
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.IV.simu.stock, 
+                             fitY.LZX = fitY.LZX.IV.simu.stock,
+                             link = "identity", 
+                             data = Pdd_pertubation,
+                             formula = ~ L.theta+D_college+L.ExpMarket)
+
+G.all.3IV.simu<- ivglm(estmethod = "g", 
+                             X="wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.3IV.simu, 
+                             fitY.LZX = fitY.LZX.3IV.simu,
+                             link = "identity", 
+                             data = Pdd_pertubation,
+                             formula = ~ D_bus_fam_experience+ L.theta+ L.HouseInd+ L.ExpMarket+ D_college)
+```
+
+# CCA on extended Pdd ####
+```{r}
+
+```
+
+```{r}
+print("------IV-heirs 2019--------")
+summary(G.fambus.1IV.full)
+print("------IV-heirs 2021--------")
+summary(G.fambus.1IV.ext)
+print("------ IV-heirs simu 2021--------")
+summary(G.fambus.1IV.simu)
+print("==============================================================================")
+print("------IV-investors 2019--------")
+summary(G.macro.2IV.full)
+print("------IV-investors 2021--------")
+summary(G.fambus.2IV.ext)
+print("------ IV-investors simu 2021--------")
+summary(G.fambus.2IV.simu)
+print("==============================================================================")
+print("------IV-stock 2019--------")
+summary(G.macro.IV.stock)
+print("------IV-stock 2021--------")
+summary(G.fambus.IV.ext.stock)
+print("------ IV-stock simu 2021--------")
+summary(G.fambus.IV.simu.stock)
+print("==============================================================================")
+print("------IV-both 2019--------")
+summary(G.all.3IV.full)
+print("------IV-both 2021--------")
+summary(G.all.3IV.ext)
+print("------ IV-both simu 2021--------")
+summary(G.all.3IV.simu)
+```
+```{r}
+# Define a function to scale and print the summary
+scale_and_summarize <- function(model, scale_factor) {
+  # Extract coefficients
+  coefs <- summary(model)$coefficients[, 1]
+  # Extract standard errors
+  se <- summary(model)$coefficients[, 2]
+  # Scale coefficients and standard errors
+  coefs_scaled <- coefs * scale_factor
+  se_scaled <- se * scale_factor
+  # Calculate z-values and p-values
+  z_values <- coefs_scaled / se_scaled
+  p_values <- 2 * pnorm(-abs(z_values))
+  
+  # Create a data frame for the summary
+  summary_df <- data.frame(
+    Estimate = coefs_scaled,
+    `Std. Error` = se_scaled,
+    `z value` = z_values,
+    `Pr(>|z|)` = p_values
+  )
+  
+  print(summary_df)
+}
+```
+
+```{r}
+# Display the above coefficient scaled by *100
+print("------IV-heirs 2019--------")
+scale_and_summarize(G.fambus.1IV.full, 100)
+print("------IV-heirs 2021--------")
+scale_and_summarize(G.fambus.1IV.ext, 100)
+print("------ IV-heirs simu 2021--------")
+scale_and_summarize(G.fambus.1IV.simu, 100)
+print("==============================================================================")
+print("------IV-investors 2019--------")
+scale_and_summarize(G.macro.2IV.full, 100)
+print("------IV-investors 2021--------")
+scale_and_summarize(G.fambus.2IV.ext, 100)
+print("------ IV-investors simu 2021--------")
+scale_and_summarize(G.fambus.2IV.simu, 100)
+print("==============================================================================")
+print("------IV-stock 2019--------")
+scale_and_summarize(G.macro.IV.stock, 100)
+print("------IV-stock 2021--------")
+scale_and_summarize(G.fambus.IV.ext.stock, 100)
+print("------ IV-stock simu 2021--------")
+scale_and_summarize(G.fambus.IV.simu.stock, 100)
+print("==============================================================================")
+print("------IV-both 2019--------")
+scale_and_summarize(G.all.3IV.full, 100)
+print("------IV-both 2021--------")
+scale_and_summarize(G.all.3IV.ext, 100)
+print("------ IV-both simu 2021--------")
+scale_and_summarize(G.all.3IV.simu, 100)
+
+```
+
+###### Parallel Probit, Logit, Probit-IV, Logit-IV regressions ######
+```{r}
+
+# Run the logit model ####
+logit_model <- pglm(Enter1_bus ~ wealth + 
+                      D_bus_fam_experience+
+                      D_college+
+                      L.theta+
+                      D_black+D_gender+D_married, 
+                      data = Pdd_data, 
+                      family = binomial(link = "logit"))
+
+summary(logit_model)
+```
+```{r}
+# Run the IV-logit model ####
+# first stage
+
+hat_log_wealth_heirs<-lm(wealth ~ Log_lumpsum_endowment ,data = Pdd_data)
+hat_log_wealth_investors<-lm(Log_total_wealth ~ house_value+stock_value ,data = Pdd_data)
+hat_log_wealth_stock<-lm(wealth ~ stock_value ,data = Pdd_data)
+```
+
+```{r}
+
+# get the predicted value of Log_total_wealth
+Pdd_data$hat_log_wealth_heirs<-predict(hat_log_wealth_heirs)
+Pdd_data$hat_log_wealth_investors<-predict(hat_log_wealth_investors)
+Pdd_data$hat_log_wealth_stock<-predict(hat_log_wealth_stock)
+```
+
+```{r}
+
+# second stage
+LogitIV_model_heirs<-pglm(Enter1_bus ~ hat_log_wealth_heirs+
+                            D_bus_fam_experience+
+                            D_college+
+                            L.theta+
+                            D_black+D_gender+D_married, 
+                            data = Pdd_data, 
+                            family = binomial(link = "logit"))
+
+LogitIV_model_investors<-pglm(Enter1_bus ~ hat_log_wealth_investors+
+                                D_bus_fam_experience+
+                                D_college+
+                                L.theta+
+                                D_black+D_gender+D_married, 
+                                data = Pdd_data,
+                                family = binomial(link = "logit"))
+
+LogitIV_model_stock<-pglm(Enter1_bus ~ hat_log_wealth_stock+
+                            D_bus_fam_experience+
+                            D_college+
+                            L.theta+
+                            D_black+D_gender+D_married, 
+                            data = Pdd_data,
+                            family = binomial(link = "logit"))
+```
+
+```{r}
+# Results of Logit-IV ####
+
+print("~~~~~~~~~~~~~~~~Logit-IV model for heirs~~~~~~~~~~~~~~~~~~~~")
+summary(LogitIV_model_heirs)
+
+print("~~~~~~~~~~~~~~~~Logit-IV model for investors~~~~~~~~~~~~~~~~")
+summary(LogitIV_model_investors)
+
+print("~~~~~~~~~~~~~~~~Logit-IV model for stock~~~~~~~~~~~~~~~~~")
+summary(LogitIV_model_stock)
+```
+# Run the probit model ####
+```{r}
+
+probit_model <- pglm(Enter1_bus ~ wealth + 
+                       D_bus_fam_experience+
+                       D_college+L.theta +D_black+D_gender+D_married, 
+                       data = Pdd_data, 
+                       family = binomial(link = "probit"))
+coef_probit_model<-coef(probit_model)
+```
+```{r}
+summary(probit_model)
+```
+### Probit-IV model ####
+```{r}
+
+ProbitIV_heirs<-pglm(Enter1_bus ~ hat_log_wealth_heirs + 
+                       D_bus_fam_experience+
+                       D_college+L.theta +D_black+D_gender+D_married, 
+                       data = Pdd_data, 
+                       family = binomial(link = "probit"))
+coef_probitIV_heirs<-coef(ProbitIV_heirs)
+
+ProbitIV_investors<-pglm(Enter1_bus ~ hat_log_wealth_investors+
+                                D_bus_fam_experience+
+                                D_college+
+                                L.theta+
+                                D_black+D_gender+D_married, 
+                                data = Pdd_data,
+                                family = binomial(link = "probit"))
+coef_probitIV_investors<-coef(ProbitIV_investors)
+
+ProbitIV_stock<-pglm(Enter1_bus ~ hat_log_wealth_stock+
+                            D_bus_fam_experience+
+                            D_college+
+                            L.theta+
+                            D_black+D_gender+D_married, 
+                            data = Pdd_data,
+                            family = binomial(link = "probit"))
+coef_probitIV_stock<-coef(ProbitIV_stock)
+```
+
+
+```{r}
+# Results of Probit-IV ####
+
+print("~~~~~~~~~~~~~~~~Probit-IV model for heirs~~~~~~~~~~~~~~~~~~~~")
+summary(ProbitIV_heirs)
+
+print("~~~~~~~~~~~~~~~~Probit-IV model for investors~~~~~~~~~~~~~~~~")
+summary(ProbitIV_investors)
+
+print("~~~~~~~~~~~~~~~~Probit-IV model for stock~~~~~~~~~~~~~~~~~")
+summary(ProbitIV_stock)
+```
+
+```{r}
+# Add new formula ####
+Function_stock_2<-wealth~D_college + L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket + stock_value*D_stock
+
+Function_Enter.2IV.stock<-Enter1_bus~D_college + L.theta+ L.BusAppl+ L.ExpMarket+ wealth+D_college+D_black+D_gender+D_married
+```
+
+
+```{r}
+# X.LZ ####
+# whole data
+fitX.LZ.1IV<-glm(formula = Function_wealth_1,data = Pdd_data)
+fitX.LZ.2IV<-glm(formula = Function_wealth_2,data = Pdd_data)
+fitX.LZ.2IV.stock<-glm(formula = Function_stock_2,data = Pdd_data)
+fitX.LZ.3IV<-glm(formula = Function_wealth_3,data = Pdd_data)
+```
+
+```{r}
+# Y.LX ####
+# full
+fitY.LX.1IV<-glm(formula = Function_Enter.1IV, family = "binomial"(link = "logit"), data = Pdd_data)
+
+fitY.LX.2IV<-glm(formula = Function_Enter.2IV, family = "binomial"(link = "logit"), data = Pdd_data)
+
+fitY.LX.2IV.stock<-glm(formula = Function_Enter.2IV.stock, family = "binomial"(link = "logit"), data = Pdd_data)
+
+fitY.LX.3IV<-glm(formula = Function_Enter.3IV, family = "binomial"(link = "logit"), data = Pdd_data)
+```
+
+```{r}
+# Z.L ####
+# full
+fitZ.L.1IV<-glm(formula = lumpsum_endowment~ D_bus_fam_experience+D_college+L.theta, family = "gaussian", data=Pdd_data)
+
+fitZ.L.2IV<-glm(formula = house_value*D_2house + stock_value*D_stock ~ D_college + L.theta+ L.BusAppl+ L.HouseInd+L.ExpMarket, family = "gaussian", data=Pdd_data)
+
+fitZ.L.2IV.stock<-glm(formula = stock_value*D_stock ~ D_college + L.theta+ L.BusAppl+ L.ExpMarket, family = "gaussian", data=Pdd_data)
+
+fitZ.L.3IV<-glm(formula = house_value*D_2house + stock_value*D_stock+ lumpsum_endowment ~ D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket, family = "gaussian", data=Pdd_data)
+```
+
+
+```{r}
+# Y.LZX ####
+# Y~LZX full ####
+fitY.LZX.1IV<-glm(formula = Enter1_bus ~  D_bus_fam_experience+D_college+L.theta +lumpsum_endowment+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_data)
+
+fitY.LZX.2IV<-glm(formula = Enter1_bus ~ D_college + L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket +house_value*D_2house + stock_value*D_stock+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_data)
+
+fitY.LZX.2IV.stock<-glm(formula = Enter1_bus ~ D_college + L.theta+ L.BusAppl+ L.ExpMarket +stock_value*D_stock+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_data)
+
+fitY.LZX.3IV<-glm(formula = Enter1_bus ~ D_bus_fam_experience + D_college+ L.theta+ L.BusAppl+ L.HouseInd+ L.ExpMarket +house_value*D_2house + stock_value*D_stock+lumpsum_endowment+wealth+D_black+D_gender+D_married,family = binomial(link = "logit") , data=Pdd_data)
+```
+
+```{r}
+# G-estimation results ####
+G.fambus.1IV.full<- ivglm(estmethod = "g", 
+                             X="Log_total_wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.1IV, 
+                             fitY.LZX = fitY.LZX.1IV,
+                             link = "identity", 
+                             data = Pdd_data,
+                             formula = ~ D_bus_fam_experience+L.theta+D_college)
+```
+
+```{r}
+G.macro.2IV.full<- ivglm(estmethod = "g", 
+                             X="Log_total_wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.2IV, 
+                             fitY.LZX = fitY.LZX.2IV,
+                             link = "identity", 
+                             data = Pdd_data,
+                             formula = ~ L.theta+D_college+L.HouseInd+L.ExpMarket)
+```
+
+```{r}
+G.macro.IV.stock.full<- ivglm(estmethod = "g", 
+                             X="Log_total_wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.2IV.stock, 
+                             fitY.LZX = fitY.LZX.2IV.stock,
+                             link = "identity", 
+                             data = Pdd_data,
+                             formula = ~ L.theta+L.ExpMarket+D_college)
+```
+
+```{r}
+G.all.3IV.full<- ivglm(estmethod = "g", 
+                             X="Log_total_wealth",
+                             Y="Enter1_bus",
+                             fitZ.L = fitZ.L.3IV, 
+                             fitY.LZX = fitY.LZX.3IV,
+                             link = "identity", 
+                             data = Pdd_data,
+                             formula = ~ D_bus_fam_experience+ L.theta+ L.HouseInd+ L.ExpMarket+D_college)
+```
+
+################################################################################
+#######################         Get predictions         ########################
+################################################################################
+
+
+# Option : predict for Pdd21
+
+```{r}
+newdata<-Pdd_pertubation
+```
+
+
+
+```{r}
+# Create a list of the fitted models with names
+models <- list(logit_model = logit_model, 
+               LogitIV_model_heirs = LogitIV_model_heirs, 
+               LogitIV_model_investors = LogitIV_model_investors, 
+               LogitIV_model_stock = LogitIV_model_stock,
+               ProbitIV_heirs = ProbitIV_heirs,
+               ProbitIV_investors = ProbitIV_investors,
+               ProbitIV_stock = ProbitIV_stock,
+               probit_model = probit_model)
+```
+
+```{r}
+
+# Parsimonious logit model
+coef_logit_model<-coef(logit_model)
+linear_predictor_logit <- with(newdata,
+                               coef_logit_model[1] +  # Intercept
+                               coef_logit_model[2] * Log_total_wealth +
+                               coef_logit_model[3] * D_bus_fam_experience +
+                               coef_logit_model[4] * D_college +
+                               # Add other terms similarly
+                               coef_logit_model["L.theta"] * L.theta +
+                               coef_logit_model["D_black"] * D_black +
+                               coef_logit_model["D_married"] * D_married)
+predicted_probabilities_logit <- 1 / (1 + exp(-linear_predictor_logit))
+
+logit_pred<-ifelse(predicted_probabilities_logit>0.5,1,0)
+```
+
+```{r}
+names(newdata)
+```
+
+
+```{r}
+
+hat_log_wealth_heirs<-lm(wealth ~ lumpsum_endowment ,data = Pdd_data)
+newdata$hat_log_wealth_heirs<-predict(hat_log_wealth_heirs, newdata = newdata)
+
+coef_LogitIV_heirs<-coef(LogitIV_model_heirs)
+linear_predictor_logitIV_heirs <- with(newdata,
+                                      coef_LogitIV_heirs[1] +  # Intercept
+                                      coef_LogitIV_heirs[2] * hat_log_wealth_heirs +
+                                      coef_LogitIV_heirs[3] * D_bus_fam_experience +
+                                      coef_LogitIV_heirs[4] * D_college +
+                                      # Add other terms similarly
+                                      coef_LogitIV_heirs["L.theta"] * L.theta +
+                                      coef_LogitIV_heirs["D_black"] * D_black +
+                                      coef_LogitIV_heirs["D_gender"] * D_gender +
+                                      coef_LogitIV_heirs["D_married"] * D_married)
+
+predicted_probabilities_logitIV_heirs <- 1 / (1 + exp(-linear_predictor_logitIV_heirs))
+
+logitIV_pred_heirs<-ifelse(predicted_probabilities_logitIV_heirs>0.5,1,0)
+```
+
+```{r}
+```
+
+```{r}
+
+hat_log_wealth_investors<-lm(wealth ~ house_value + stock_value ,data = Pdd_data)
+newdata$hat_log_wealth_investors<-predict(hat_log_wealth_investors, newdata = newdata)
+
+coef_LogitIV_investors<-coef(LogitIV_model_investors)
+linear_predictor_logitIV_investors <- with(newdata,
+                                          coef_LogitIV_investors[1] +  # Intercept
+                                          coef_LogitIV_investors[2] * hat_log_wealth_investors +
+                                          coef_LogitIV_investors[3] * D_bus_fam_experience +
+                                          coef_LogitIV_investors[4] * D_college +
+                                          # Add other terms similarly
+                                          coef_LogitIV_investors["L.theta"] * L.theta +
+                                          coef_LogitIV_investors["D_black"] * D_black +
+                                          coef_LogitIV_investors["D_gender"] * D_gender +
+                                          coef_LogitIV_investors["D_married"] * D_married)
+
+predicted_probabilities_logitIV_investors <- 1 / (1 + exp(-linear_predictor_logitIV_investors))
+
+logitIV_pred_investors<-ifelse(predicted_probabilities_logitIV_investors>0.5,1,0)
+```
+
+```{r}
+
+hat_log_wealth_stock<-lm(wealth ~ stock_value ,data = Pdd_data)
+newdata$hat_log_wealth_stock<-predict(hat_log_wealth_stock, newdata = newdata)
+
+coef_LogitIV_stock<-coef(LogitIV_model_stock)
+linear_predictor_IV_stock <- with(newdata,
+                                 coef_LogitIV_stock[1] +  # Intercept
+                                 coef_LogitIV_stock[2] * Log_total_wealth +
+                                 coef_LogitIV_stock[3] * D_college +
+                                 # Add other terms similarly
+                                 coef_LogitIV_stock["L.theta"] * L.theta +
+                                 coef_LogitIV_stock["D_black"] * D_black+
+                                 coef_LogitIV_stock["D_gender"] * D_gender+
+                                 coef_LogitIV_stock["D_married"] * D_married)
+
+predicted_probabilities_logitIV_stock <- 1 / (1 + exp(-linear_predictor_IV_stock))
+
+logitIV_pred_stock<-ifelse(predicted_probabilities_logitIV_stock>0.5,1,0)
+```
+
+
+
+```{r}
+
+# Probit model
+coef_probit<-coef(probit_model)
+linear_predictor_probit <- with(newdata,
+                               coef_probit[1] +  # Intercept
+                               coef_probit[2] * Log_total_wealth +
+                               coef_probit[3] * D_bus_fam_experience +
+                               coef_probit[4] * D_college +
+                               # Add other terms similarly
+                               coef_probit["L.theta"] * L.theta +
+                               coef_probit["D_black"] * D_black +
+                               coef_probit["D_gender"] * D_gender +
+                               coef_probit["D_married"] * D_married)
+
+predicted_probabilities_probit <- pnorm(linear_predictor_probit)
+
+probit_pred<-ifelse(predicted_probabilities_probit>0.5,1,0)
+```
+
+
+```{r}
+
+# Probit-IV model
+hat_log_wealth_heirs<-lm(wealth ~ lumpsum_endowment ,data = Pdd_data)
+newdata$hat_log_wealth_heirs<-predict(hat_log_wealth_heirs, newdata = newdata)
+
+coef_ProbitIV_heirs<-coef(ProbitIV_heirs)
+linear_predictor_probitIV_heirs <- with(newdata,
+                                      coef_ProbitIV_heirs[1] +  # Intercept
+                                      coef_ProbitIV_heirs[2] * hat_log_wealth_heirs +
+                                      coef_ProbitIV_heirs[3] * D_bus_fam_experience +
+                                      coef_ProbitIV_heirs[4] * D_college +
+                                      # Add other terms similarly
+                                      coef_ProbitIV_heirs["L.theta"] * L.theta +
+                                      coef_ProbitIV_heirs["D_black"] * D_black +
+                                      coef_ProbitIV_heirs["D_married"]* D_married)
+
+predicted_probabilities_probitIV_heirs <- pnorm(linear_predictor_probitIV_heirs)
+
+probitIV_pred_heirs<-ifelse(predicted_probabilities_probitIV_heirs>0.5,1,0)
+```
+
+```{r}
+
+hat_log_wealth_investors<-lm(wealth ~ house_value + stock_value ,data = Pdd_data)
+newdata$hat_log_wealth_investors<-predict(hat_log_wealth_investors, newdata = newdata)
+
+coef_ProbitIV_investors<-coef(ProbitIV_investors)
+linear_predictor_probitIV_investors <- with(newdata,
+                                          coef_ProbitIV_investors[1] +  # Intercept
+                                          coef_ProbitIV_investors[2] * hat_log_wealth_investors +
+                                          coef_ProbitIV_investors[3] * D_bus_fam_experience +
+                                          coef_ProbitIV_investors[4] * D_college +
+                                          # Add other terms similarly
+                                          coef_ProbitIV_investors["L.theta"] * L.theta +
+                                          coef_ProbitIV_investors["D_black"] * D_black +
+                                          coef_ProbitIV_investors["D_married"]* D_married)
+
+predicted_probabilities_probitIV_investors <- pnorm(linear_predictor_probitIV_investors)
+
+probitIV_pred_investors<-ifelse(predicted_probabilities_probitIV_investors>0.5,1,0)
+```
+
+```{r}
+
+hat_log_wealth_stock<-lm(wealth ~ stock_value ,data = Pdd_data)
+newdata$hat_log_wealth_stock<-predict(hat_log_wealth_stock, newdata = newdata)
+
+coef_ProbitIV_stock<-coef(ProbitIV_stock)
+linear_predictor_probitIV_stock <- with(newdata,
+                                 coef_ProbitIV_stock[1] +  # Intercept
+                                 coef_ProbitIV_stock[2] * Log_total_wealth +
+                                 coef_ProbitIV_stock[3] * D_college +
+                                 # Add other terms similarly
+                                 coef_ProbitIV_stock["L.theta"] * L.theta +
+                                 coef_ProbitIV_stock["D_black"] * D_black+
+                                 coef_ProbitIV_stock["D_married"] * D_married)
+
+predicted_probabilities_probitIV_stock <- pnorm(linear_predictor_probitIV_stock)
+
+probitIV_pred_stock<-ifelse(predicted_probabilities_probitIV_stock>0.5,1,0)
+```
+
+
+```{r}
+
+# predit G-estimation
+
+#### Pred fitX.LZ, get \hat{x} 
+
+# Get predicted \hat{x} for a simulated stimulus check of 5000$. the house prices and stock markets are the true value ####
+pred.fitX.LZ.1IV<-predict(fitX.LZ.1IV,
+                                        newdata = newdata, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+pred.fitX.LZ.2IV<-predict(fitX.LZ.2IV,
+                                        newdata = newdata, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.2IV.stock<-predict(fitX.LZ.2IV.stock,
+                                        newdata = newdata, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+
+pred.fitX.LZ.3IV<-predict(fitX.LZ.3IV,
+                                        newdata = newdata, 
+                                        type = c("link","response","terms"),
+                                        se.fit = FALSE,
+                                        dispersion = NULL,
+                                        terms = NULL,
+                                        na.action = na.pass)
+```
+
+```{r}
+Pdd_pertubation.1IV<-newdata
+Pdd_pertubation.1IV$Log_total_wealth<-pred.fitX.LZ.1IV
+Pdd_pertubation.2IV<-newdata
+Pdd_pertubation.2IV$Log_total_wealth<-pred.fitX.LZ.2IV
+Pdd_pertubation.2IV.stock<-newdata
+Pdd_pertubation.2IV.stock$Log_total_wealth<-pred.fitX.LZ.2IV.stock
+Pdd_pertubation.3IV<-newdata
+Pdd_pertubation.3IV$Log_total_wealth<-pred.fitX.LZ.3IV
+```
+
+```{r}
+pred.fitY.LX.1IV<-predict(fitY.LX.1IV,
+                                     newdata = Pdd_pertubation.1IV,
+                                     type = "response",
+                                     se.fit = TRUE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+pred.fitY.LX.2IV<-predict(fitY.LX.2IV,
+                                     newdata = Pdd_pertubation.2IV,
+                                     type = "response",
+                                     se.fit = TRUE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+pred.fitY.LX.2IV.stock<-predict(fitY.LX.2IV.stock,
+                                     newdata = Pdd_pertubation.2IV.stock,
+                                     type = "response",
+                                     se.fit = TRUE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+
+pred.fitY.LX.3IV<-predict(fitY.LX.3IV,
+                                     newdata = Pdd_pertubation.3IV,
+                                     type = "response",
+                                     se.fit = TRUE,
+                                     dispersion = NULL,
+                                     terms = NULL,
+                                     na.action = na.pass)
+```
+
+```{r}
+
+predicted_G.1IV <- 1 / (1 + exp(-pred.fitY.LX.1IV$fit))
+predicted_G.2IV <- 1 / (1 + exp(-pred.fitY.LX.2IV$fit))
+predicted_G.IV.stock <- 1 / (1 + exp(-pred.fitY.LX.2IV.stock$fit))
+predicted_G.3IV <- 1 / (1 + exp(-pred.fitY.LX.3IV$fit))
+```
+
+```{r}
+
+G.1IV_pred<-ifelse(predicted_G.1IV>0.5,1,0)
+G.2IV_pred<-ifelse(predicted_G.2IV>0.5,1,0)
+G.2IV_stock_pred<-ifelse(predicted_G.IV.stock>0.5,1,0)
+G.3IV_pred<-ifelse(predicted_G.3IV>0.5,1,0)
+```
+
+```{r}
+```
+
+
+
+```{r}
+
+# Confusion matrix
+# Logit model
+logit_confusion <- table(Predicted = logit_pred, Actual = newdata$Enter1_bus)
+cat("Logit Model Confusion Matrix:\n")
+print(logit_confusion)
+
+# Logit IV (heirs) model
+logitIV_heirs_confusion <- table(Predicted = logitIV_pred_heirs, Actual = newdata$Enter1_bus)
+cat("\nLogit IV (Heirs) Model Confusion Matrix:\n")
+print(logitIV_heirs_confusion)
+
+# Logit IV (investors) model
+logitIV_investors_confusion <- table(Predicted = logitIV_pred_investors, Actual = newdata$Enter1_bus)
+cat("\nLogit IV (Investors) Model Confusion Matrix:\n")
+print(logitIV_investors_confusion)
+
+# Logit IV (stock) model
+logitIV_stock_confusion <- table(Predicted = logitIV_pred_stock, Actual = newdata$Enter1_bus)
+cat("\nLogit IV (Stock) Model Confusion Matrix:\n")
+print(logitIV_stock_confusion)
+
+# Probit model
+probit_confusion <- table(Predicted = probit_pred, Actual = newdata$Enter1_bus)
+cat("\nProbit Model Confusion Matrix:\n")
+print(probit_confusion)
+
+# Probit IV (heirs) model
+probitIV_heirs_confusion <- table(Predicted = probitIV_pred_heirs, Actual = newdata$Enter1_bus)
+cat("\nProbit IV (Heirs) Model Confusion Matrix:\n")
+print(probitIV_heirs_confusion)
+
+# Probit IV (investors) model
+probitIV_investors_confusion <- table(Predicted = probitIV_pred_investors, Actual = newdata$Enter1_bus)
+cat("\nProbit IV (Investors) Model Confusion Matrix:\n")
+print(probitIV_investors_confusion)
+
+# Probit IV (stock) model
+probitIV_stock_confusion <- table(Predicted = probitIV_pred_stock, Actual = newdata$Enter1_bus)
+cat("\nProbit IV (Stock) Model Confusion Matrix:\n")
+print(probitIV_stock_confusion)
+
+
+# G.1IV model
+G.1IV_confusion <- table(Predicted = G.1IV_pred, Actual = newdata$Enter1_bus)
+cat("\nG.1IV Model Confusion Matrix:\n")
+print(G.1IV_confusion)
+
+# G.2IV model
+G.2IV_confusion <- table(Predicted = G.2IV_pred, Actual = newdata$Enter1_bus)
+cat("\nG.2IV Model Confusion Matrix:\n")
+print(G.2IV_confusion)
+
+# G.2IV.stock model
+G.2IV_stock_confusion <- table(Predicted = G.2IV_stock_pred, Actual = newdata$Enter1_bus)
+cat("\nG.2IV.stock Model Confusion Matrix:\n")
+print(G.2IV_stock_confusion)
+
+# G.3IV model
+G.3IV_confusion <- table(Predicted = G.3IV_pred, Actual = newdata$Enter1_bus)
+cat("\nG.3IV Model Confusion Matrix:\n")
+print(G.3IV_confusion)
+```
+
+# AUC-ROC
+
+```{r}
+# Install and load the pROC package if you haven't already
+# install.packages("pROC")
+library(pROC)
+
+# Calculate the AUC-ROC for each model
+logit_roc <- roc(newdata$Enter1_bus, predicted_probabilities_logit)
+logitIV_heirs_roc <- roc(newdata$Enter1_bus, predicted_probabilities_logitIV_heirs)
+logitIV_investors_roc <- roc(newdata$Enter1_bus, predicted_probabilities_logitIV_investors)
+logitIV_stock_roc <- roc(newdata$Enter1_bus, predicted_probabilities_logitIV_stock)
+probit_roc <- roc(newdata$Enter1_bus, predicted_probabilities_probit)
+probitIV_heirs_roc <- roc(newdata$Enter1_bus, predicted_probabilities_probitIV_heirs)
+probitIV_investors_roc <- roc(newdata$Enter1_bus, predicted_probabilities_probitIV_investors)
+probitIV_stock_roc <- roc(newdata$Enter1_bus, predicted_probabilities_probitIV_stock)
+G.1IV_roc <- roc(newdata$Enter1_bus, pred.fitY.LX.1IV$fit)
+G.2IV_roc <- roc(newdata$Enter1_bus, pred.fitY.LX.2IV$fit)
+G.2IV_stock_roc <- roc(newdata$Enter1_bus, pred.fitY.LX.2IV.stock$fit)
+G.3IV_roc <- roc(newdata$Enter1_bus, pred.fitY.LX.3IV$fit)
+
+# Display the AUC-ROC for each model
+cat("Logit Model AUC-ROC:", auc(logit_roc), "\n")
+cat("Logit IV (Heirs) Model AUC-ROC:", auc(logitIV_heirs_roc), "\n")
+cat("Logit IV (Investors) Model AUC-ROC:", auc(logitIV_investors_roc), "\n")
+cat("Logit IV (Stock) Model AUC-ROC:", auc(logitIV_stock_roc), "\n")
+cat("Probit Model AUC-ROC:", auc(probit_roc), "\n")
+cat("Probit IV (Heirs) Model AUC-ROC:", auc(probitIV_heirs_roc), "\n")
+cat("Probit IV (Investors) Model AUC-ROC:", auc(probitIV_investors_roc), "\n")
+cat("Probit IV (Stock) Model AUC-ROC:", auc(probitIV_stock_roc), "\n")
+cat("G.1IV Model AUC-ROC:", auc(G.1IV_roc), "\n")
+cat("G.2IV Model AUC-ROC:", auc(G.2IV_roc), "\n")
+cat("G.2IV.stock Model AUC-ROC:", auc(G.2IV_stock_roc), "\n")
+cat("G.3IV Model AUC-ROC:", auc(G.3IV_roc), "\n")
+```

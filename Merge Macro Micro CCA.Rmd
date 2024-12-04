@@ -1,0 +1,146 @@
+---
+title: "Merge CCA Micro"
+author: "Ivy Yang"
+date: "2024-05-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+# Load data
+# On Mac
+load(file = "/Users/ivyyang/Dropbox/cloud/Submitted papers/Data/CCA_time_series.rds")
+load(file = "/Users/ivyyang/Dropbox/cloud/Submitted papers/Data/data_macro_SP500.rds")
+load(file = "/Users/ivyyang/Dropbox/cloud/Research/Empirical Work/Macro_factor_economic/d21_clean_data_clean.rds")
+```
+
+```{r}
+#Load data
+# On DELL
+load(file = "C:/Users/xxy350/Dropbox/cloud/Submitted papers/Data/CCA_time_series.rds")
+load(file = "C:/Users/xxy350/Dropbox/cloud/Submitted papers/Data/data_macro_SP500.rds")
+load(file = "C:/Users/xxy350/Dropbox/cloud/Research/Empirical Work/Macro_factor_economic/d21_clean_data_clean.rds")
+```
+
+
+```{r}
+library(dplyr)
+library(lubridate)
+```
+
+```{r}
+# Extract the year from the date
+data$year<-year(data$date)
+# Extract the year from the date and ensure it is numeric
+data <- data %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d"),
+         year = year(date))
+
+# Add a column that represents the two-year period
+data <- data %>%
+  mutate(two_year_period = ifelse(year %% 2 == 0, year - 1, year))
+
+# Ensure 'year' column in CCA_time_series is numeric
+CCA_time_series <- CCA_time_series %>%
+  mutate(year = as.numeric(year))
+
+# Add a column that represents the two-year period for CCA_time_series
+CCA_time_series <- CCA_time_series %>%
+  mutate(two_year_period = ifelse(year %% 2 == 0, year - 1, year))
+
+# Merge CCA_time_series with the other data based on the two-year period
+merged_data <- merge(data, CCA_time_series, by = "two_year_period")
+
+# View the first few rows of the merged data
+print(head(merged_data))
+```
+
+```{r}
+# BABATOTALSAUS does not have data before 2000, here I need to cope with it separately.
+
+# Select variables other than "date", "year", "two_year_period", "BABATOTALSAUS"
+var_to_average <- setdiff(names(data), c("date", "year", "two_year_period", "BABATOTALSAUS"))
+
+# Compute the two-year average for each variable
+data_avg <- data %>%
+  group_by(two_year_period) %>%
+  summarise(across(all_of(var_to_average), ~mean(.x, na.rm = TRUE)), .groups="drop")
+
+# For "BABATOTALSAUS", calculate mean only for the dates from 2004-07-01 to 2004-12-01 for 2005 and regular two-year average for other years
+babatotalsaus_avg <- data %>%
+  group_by(two_year_period) %>%
+  summarise(BABATOTALSAUS = if_else(two_year_period == 2005 & date >= as.Date("2004-07-01") & date <= as.Date("2004-12-01"),
+                                    mean(BABATOTALSAUS, na.rm = TRUE),
+                                    mean(BABATOTALSAUS, na.rm = TRUE)),
+            .groups="drop")
+
+# Join the average data for "BABATOTALSAUS" back to the rest of the data
+data_avg <- left_join(data_avg, babatotalsaus_avg, by = "two_year_period")
+
+# Specifically handle BOGZ1FA564091403A from 2002 onward
+bogz_avg <- data %>%
+  filter(year >= 2002) %>%
+  group_by(two_year_period) %>%
+  summarise(BOGZ1FA564091403A = mean(BOGZ1FA564091403A, na.rm = TRUE), .groups = "drop")
+
+# Merge the specific handling for BOGZ1FA564091403A with the merged_data
+data_avg <- left_join(data_avg, bogz_avg, by = "two_year_period")
+
+
+# Compute the mean for each variable by two-year period
+data_average <- data %>%
+  group_by(two_year_period) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+
+
+# Print the resulting dataframe
+
+names(data_average)
+```
+
+```{r}
+
+var_to_average_CCA <- setdiff(names(CCA_time_series), c("date", "year", "two_year_period"))
+
+# Compute the two-year average for each variable
+CCA_avg <- CCA_time_series %>%
+  group_by(two_year_period) %>%
+  summarise(across(all_of(var_to_average_CCA), ~mean(.x, na.rm = TRUE)), .groups="drop")
+```
+
+```{r}
+# Merge the two datasets
+# Merge the macro confoundings to micro data d
+# Merge d and merged_lasso_cca
+merged_data_21 <- merge(d, data_average, by.x = "year", by.y = "two_year_period", all.x = TRUE)
+
+merged_data_21 <- merge(merged_data_21, CCA_avg, by.x = "year", by.y = "two_year_period", all.x = TRUE)
+
+# Replace NA with 0
+merged_data_21 <- replace(merged_data_21, is.na(merged_data_21), 0)
+
+# check the result of merge
+names(merged_data_21)
+
+```
+```{r}
+# On Mac
+# save the all confounding data
+save(merged_data_21, file = "/Users/ivyyang/Dropbox/cloud/Research/Empirical Work/Macro_factor_economic/d21_clean_data_clean_all_confoundings.rds")
+```       
+```{r}
+# On Mac
+save(merged_data_21, file = "/Users/ivyyang/Dropbox/cloud/Submitted papers/Data/d21_clean_data_clean_all_confoundings.RData")
+```
+
+```{r}
+# On DELL
+# save the all confounding data
+save(merged_data_21, file = "C:/Users/xxy350/Dropbox/cloud/Research/Empirical Work/Macro_factor_economic/d21_clean_data_clean_all_confoundings.rds")
+```       
+```{r}
+# On DELL
+save(merged_data_21, file = "C:/Users/xxy350/Dropbox/cloud/Submitted papers/Data/d21_clean_data_clean_all_confoundings.RData")
+```

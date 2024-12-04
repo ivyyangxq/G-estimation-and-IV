@@ -1,0 +1,159 @@
+---
+title: "CCA for confounders"
+author: "Ivy Yang"
+date: "2024-05-06"
+output: html_document
+---
+
+```{r}
+# Load data ####
+# On MAC
+load(file = "/Users/ivyyang/Dropbox/cloud/Submitted papers/Data/data_macro_SP500.rds")
+```
+
+```{r}
+# On DELL
+load(file = "C:/Users/xxy350/Dropbox/cloud/Submitted papers/Data/data_macro_SP500.rds")
+```
+
+
+```{r}
+# On Mac
+save(data, file = "/Users/ivyyang/Dropbox/cloud/Submitted papers/Data/data_macro_FAVAR.rds")
+```
+
+```{r}
+# On DELL
+save(data, file = "C:/Users/xxy350/Dropbox/cloud/Submitted papers/Data/data_macro_FAVAR.rds")
+```
+
+```{r}
+install.packages("deSolve")
+```
+
+```{r}
+library(dplyr)
+library(CCA)
+library(caret) # For checking zero variance
+```
+
+```{r}
+# Example to parse date column into year, month, and date
+# Assuming the "date" column is in a recognizable date format
+data <- data %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d")) %>%
+  mutate(year = format(date, "%Y"),
+         month = format(date, "%m"),
+         day = format(date, "%d"))
+
+# Replace NA values with zeroes across all columns
+data <- data %>% mutate_all(~ifelse(is.na(.), 0, .))
+
+# Extract and keep the year, month, and date columns
+temporal_info <- data %>% dplyr::select(year, month, day)
+
+# Select the three key variables for one dataset
+data_CEE <- data %>% dplyr::select("BABATOTALSAUS", "USSTHPI", "SP500")
+
+# Select the rest of the variables for another dataset
+data_rest <- data %>% dplyr::select(-c("BABATOTALSAUS", "USSTHPI", "SP500", "year", "month", "day"))
+
+# Check for zero variance columns and remove them
+nzv_CEE <- nearZeroVar(data_CEE, saveMetrics = TRUE)
+data_CEE <- data_CEE[, !nzv_CEE$nzv]
+
+nzv_rest <- nearZeroVar(data_rest, saveMetrics = TRUE)
+data_rest <- data_rest[, !nzv_rest$nzv]
+
+# Check for multicollinearity and remove highly correlated variables
+find_highly_correlated <- function(data, threshold = 0.9) {
+  cor_matrix <- cor(data)
+  highly_correlated <- findCorrelation(cor_matrix, cutoff = threshold)
+  return(highly_correlated)
+}
+
+highly_correlated_CEE <- find_highly_correlated(data_CEE)
+data_CEE <- data_CEE[, -highly_correlated_CEE]
+
+highly_correlated_rest <- find_highly_correlated(data_rest)
+data_rest <- data_rest[, -highly_correlated_rest]
+
+# Standardize data (important for CCA)
+data_CEE_standardized <- scale(data_CEE)
+data_rest_standardized <- scale(data_rest)
+
+# Perform Canonical Correlation Analysis
+cca_result <- cc(data_CEE_standardized, data_rest_standardized)
+
+# Print the canonical correlations
+print(cca_result$cor)
+
+```
+```{r}
+# Canonical Scores and Coefficients for the first two components
+scores_rest <- cca_result$yscores[, 1:2]  # First two canonical scores
+coefficients_rest <- cca_result$ycoef[, 1:2]  # Corresponding coefficients
+
+# Calculate the composite time series for each canonical component
+CCA_time_series <- data_rest_standardized %*% coefficients_rest
+
+# Column names indicating which component each series corresponds to
+colnames(CCA_time_series) <- c("CCA1", "CCA2")
+
+# Combine the year, month, and date columns with the new canonical component series
+CCA_time_series <- data.frame(temporal_info, CCA_time_series)
+
+# View the first few rows of the new time series data with temporal columns
+print(head(CCA_time_series))
+
+# Calculate canonical loadings
+canonical_loadings_rest <- cor(data_rest_standardized, scores_rest)
+
+# Combine canonical loadings with variable names
+loadings_df <- data.frame(Variable = colnames(data_rest_standardized), 
+                          CCA1_Loading = canonical_loadings_rest[, 1],
+                          CCA2_Loading = canonical_loadings_rest[, 2])
+
+# View the canonical loadings
+print(loadings_df)
+
+```
+
+```{r}
+# Canonical Scores and Coefficients
+scores_rest <- cca_result$yscores[, 1:2]  # First three canonical scores
+coefficients_rest <- cca_result$ycoef[, 1:2]  # Corresponding coefficients
+
+# Calculate the composite time series for each canonical component
+CCA_time_series <- data_rest_standardized %*% coefficients_rest
+
+# Column names indicating which component each series corresponds to
+colnames(CCA_time_series) <- c("CCA1", "CCA2")
+
+
+# Combine the year, month, and date columns with the new canonical component series
+CCA_time_series <- data.frame(temporal_info, CCA_time_series)
+
+# View the first few rows of the new time series data with temporal columns
+print(head(CCA_time_series))
+```
+```{r}
+# On Mac
+# Save the CCA time series data
+save(CCA_time_series, file = "/Users/ivyyang/Dropbox/cloud/Submitted papers/Data/CCA_time_series.rds")
+
+write.csv(CCA_time_series, file = "/Users/ivyyang/Dropbox/cloud/Submitted papers/Data/CCA_time_series.csv")
+```
+
+```{r}
+
+# On DELL
+# Save the CCA time series data
+save(CCA_time_series, file = "C:/Users/xxy350/Dropbox/cloud/Submitted papers/Data/CCA_time_series.rds")
+
+write.csv(CCA_time_series, file = "C:/Users/xxy350/Dropbox/cloud/Submitted papers/Data/CCA_time_series.csv")
+```
+```
+
+
+
